@@ -1,0 +1,21 @@
+[default]
+description = "Default permissions for the plugin"
+permissions = [
+  "allow-connect",
+  "allow-disconnect",
+  "allow-set-token",
+  "allow-publish",
+  "allow-rpc",
+  "allow-presence",
+  "allow-presence-stats",
+  "allow-history",
+  "allow-send",
+  "allow-refresh",
+  "allow-sub-refresh",
+  "allow-ping",
+  "allow-is-connected",
+  "allow-get-subscriptions",
+  "allow-get-connection-state",
+  "allow-add-subscription",
+  "allow-remove-subscription"
+]

@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-presence-stats"
+description = "Enables the presence_stats command without any pre-configured scope."
+commands.allow = ["presence_stats"]
+
+[[permission]]
+identifier = "deny-presence-stats"
+description = "Denies the presence_stats command without any pre-configured scope."
+commands.deny = ["presence_stats"]

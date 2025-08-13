@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-stop-connection"
+description = "Enables the stop_connection command without any pre-configured scope."
+commands.allow = ["stop_connection"]
+
+[[permission]]
+identifier = "deny-stop-connection"
+description = "Denies the stop_connection command without any pre-configured scope."
+commands.deny = ["stop_connection"]
