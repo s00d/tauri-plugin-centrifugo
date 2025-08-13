@@ -1,3 +1,10 @@
+[![npm version](https://img.shields.io/npm/v/tauri-plugin-centrifugo-api/latest?style=for-the-badge)](https://www.npmjs.com/package/tauri-plugin-centrifugo-api)
+[![Crates.io](https://img.shields.io/crates/v/tauri-plugin-centrifugo?style=for-the-badge)](https://crates.io/crates/tauri-plugin-centrifugo)
+[![Documentation](https://img.shields.io/badge/docs-docs.rs-blue?style=for-the-badge)](https://docs.rs/tauri-plugin-centrifugo/latest/tauri_plugin_centrifugo/all.html)
+[![GitHub issues](https://img.shields.io/badge/github-issues-orange?style=for-the-badge)](https://github.com/s00d/tauri-plugin-centrifugo/issues)
+[![GitHub stars](https://img.shields.io/badge/github-stars-yellow?style=for-the-badge)](https://github.com/s00d/tauri-plugin-centrifugo/stargazers)
+[![Donate](https://img.shields.io/badge/Donate-Donationalerts-ff4081?style=for-the-badge)](https://www.donationalerts.com/r/s00d88)
+
 # Tauri Plugin Centrifugo
 
 A Tauri plugin for real-time communication with Centrifugo server using the `tokio-centrifuge` library.
@@ -39,11 +46,9 @@ pnpm add tauri-plugin-centrifugo-api
 Initialize the plugin in your Tauri app:
 
 ```rust
-use tauri_plugin_centrifugo::init;
-
 fn main() {
     tauri::Builder::default()
-        .plugin(init())
+        .plugin(tauri_plugin_centrifugo::init;())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -8,11 +8,11 @@
     { "type": "refactor", "hidden": true },
     { "type": "test", "hidden": true }
   ],
-  "commitUrlFormat": "https://github.com/s00d/tauri-plugin-serialplugin/commit/{{hash}}",
-  "compareUrlFormat": "https://github.com/s00d/tauri-plugin-serialplugin/compare/{{previousTag}}...{{currentTag}}",
-  "issueUrlFormat": "https://github.com/s00d/tauri-plugin-serialplugin/issues/{{id}}",
+  "commitUrlFormat": "https://github.com/s00d/tauri-plugin-centrifugo/commit/{{hash}}",
+  "compareUrlFormat": "https://github.com/s00d/tauri-plugin-centrifugo/compare/{{previousTag}}...{{currentTag}}",
+  "issueUrlFormat": "https://github.com/s00d/tauri-plugin-centrifugo/issues/{{id}}",
   "scripts": {
-    "postbump": "jq -r .version package.json > VERSION && sed -i '' \"s/^version = .*$/version = \\\"$(cat VERSION)\\\"/\" Cargo.toml && rm VERSION && sleep 10 && git add Cargo.toml Cargo.lock CHANGELOG.md examples/serialport-test/src-tauri/Cargo.lock && git commit -m \"chore: update version and changelog\" && git push",
+    "postbump": "jq -r .version package.json > VERSION && sed -i '' \"s/^version = .*$/version = \\\"$(cat VERSION)\\\"/\" Cargo.toml && rm VERSION && sleep 10 && git add Cargo.toml Cargo.lock CHANGELOG.md examples/tauri-app/src-tauri/Cargo.lock && git commit -m \"chore: update version and changelog\" && git push",
     "postchangelog": "git add CHANGELOG.md Cargo.toml"
   }
 }

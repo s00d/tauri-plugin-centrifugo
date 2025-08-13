@@ -1,10 +1,13 @@
 [package]
 name = "tauri-plugin-centrifugo"
 version = "0.1.0"
-authors = [ "You" ]
+authors = [ "s00d" ]
 description = "Tauri plugin for Centrifugo real-time communication using tokio-centrifuge"
 edition = "2021"
 rust-version = "1.77.2"
+repository = "https://github.com/s00d/tauri-plugin-centrifugo"
+license = "MIT"
+keywords = ["tauri", "plugin", "centrifugo", "websocket", "real-time"]
 exclude = ["/examples", "/dist-js", "/node_modules"]
 links = "tauri-plugin-centrifugo"
 

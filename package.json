@@ -1,8 +1,21 @@
 {
   "name": "tauri-plugin-centrifugo-api",
   "version": "0.1.0",
-  "author": "You",
-  "description": "",
+  "author": "s00d",
+  "description": "Tauri plugin for Centrifugo real-time communication using tokio-centrifuge",
+  "repository": "https://github.com/s00d/tauri-plugin-centrifugo",
+  "license": "MIT",
+  "keywords": [
+    "tauri",
+    "plugin",
+    "centrifugo",
+    "websocket",
+    "real-time",
+    "communication",
+    "rust",
+    "typescript",
+    "javascript"
+  ],
   "type": "module",
   "types": "./dist-js/index.d.ts",
   "main": "./dist-js/index.cjs",
