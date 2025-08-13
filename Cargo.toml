@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-centrifugo"
-version = "0.1.1"
+version = "0.1.0"
 authors = [ "s00d" ]
 description = "Tauri plugin for Centrifugo real-time communication using tokio-centrifuge"
 edition = "2021"
