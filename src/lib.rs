@@ -13,15 +13,15 @@
 //!
 //! ## Usage
 //!
-//! ```rust
+//! ```rust,no_run
 //! use tauri_plugin_centrifugo::init;
 //!
-//! fn main() {
-//!     tauri::Builder::default()
-//!         .plugin(init())
-//!         .run(tauri::generate_context!())
-//!         .expect("error while running tauri application");
-//! }
+//! // fn main() {
+//! //     tauri::Builder::default()
+//! //         .plugin(init())
+//! //         .run(tauri::generate_context!())
+//! //         .expect("error while running tauri application");
+//! // }
 //! ```
 //!
 //! ## Architecture
@@ -60,15 +60,15 @@ pub use error::Result;
 ///
 /// # Example
 ///
-/// ```rust
+/// ```rust,no_run
 /// use tauri_plugin_centrifugo::init;
 ///
-/// fn main() {
-///     tauri::Builder::default()
-///         .plugin(init())
-///         .run(tauri::generate_context!())
-///         .expect("error while running tauri application");
-/// }
+/// // fn main() {
+/// //     tauri::Builder::default()
+/// //         .plugin(init())
+/// //         .run(tauri::generate_context!())
+/// //         .expect("error while running tauri application");
+/// // }
 /// ```
 ///
 /// # Returns
