@@ -33,7 +33,7 @@
     "build": "rollup -c",
     "prepublishOnly": "pnpm build",
     "pretest": "pnpm build",
-    "release": "standard-version",
+    "release": "pnpm build && cargo build",
     "release:publish": "pnpm publish && cargo publish"
   },
   "dependencies": {
@@ -42,7 +42,6 @@
   "devDependencies": {
     "@rollup/plugin-typescript": "^12.0.0",
     "rollup": "^4.9.6",
-    "standard-version": "^9.5.0",
     "typescript": "^5.3.3",
     "tslib": "^2.6.2"
   },
