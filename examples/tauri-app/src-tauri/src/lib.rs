@@ -6,7 +6,7 @@ fn greet(name: &str) -> String {
 
 #[tauri::command]
 async fn start_sockets(window: tauri::Window) -> Result<String, String> {
-    // Запускаем сокеты через бек
+    // Start sockets through backend
     let config = tauri_plugin_centrifugo::models::StartConfig {
         url: "ws://localhost:8000/connection/websocket".to_string(),
         token: None,

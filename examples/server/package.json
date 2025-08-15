@@ -1,0 +1,41 @@
+{
+  "name": "centrifugo-server",
+  "version": "1.0.0",
+  "description": "Серверная часть Centrifugo с gRPC API и TypeScript скриптом отправки сообщений",
+  "main": "dist/info-sender.js",
+  "type": "commonjs",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/info-sender.js",
+    "dev": "ts-node src/info-sender.ts",
+    "watch": "tsc --watch",
+    "dev:watch": "ts-node --watch src/info-sender.ts",
+    "centrifugo": "centrifugo -c centrifugo.json",
+    "centrifugo:dev": "centrifugo -c centrifugo.json --debug",
+    "setup": "pnpm install && pnpm run build",
+    "typecheck": "tsc --noEmit",
+    "test-proto": "ts-node -e \"const grpc = require('@grpc/grpc-js'); const protoLoader = require('@grpc/proto-loader'); const path = require('path'); const packageDefinition = protoLoader.loadSync(path.join(__dirname, 'proto', 'api.proto'), { keepCase: true, longs: String, enums: String, defaults: true, oneofs: true }); const centrifugoProto = grpc.loadPackageDefinition(packageDefinition); console.log('Proto структура:', JSON.stringify(centrifugoProto, null, 2));\""
+  },
+  "dependencies": {
+    "@grpc/grpc-js": "^1.9.0",
+    "@grpc/proto-loader": "^0.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": [
+    "centrifugo",
+    "grpc",
+    "websocket",
+    "realtime",
+    "api",
+    "server"
+  ],
+  "author": "Tauri Centrifugo Plugin",
+  "license": "MIT"
+}

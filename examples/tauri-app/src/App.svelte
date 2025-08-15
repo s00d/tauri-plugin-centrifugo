@@ -1,32 +1,32 @@
 <script lang="ts">
   import { onMount } from 'svelte'
   import {
-    connect,
-    disconnect,
-    setToken,
-    publish,
-    rpc,
-    isConnected,
-    getSubscriptions,
-    getConnectionState,
-    addSubscription,
-    removeSubscription,
-    onConnecting,
-    onConnected,
-    onDisconnected,
-    onError,
-    onSubscribed,
-    onUnsubscribed,
-    onSubscribing,
-    onPublication,
-    helpers,
-    utils
-  } from 'tauri-plugin-centrifugo-api'
+  connect,
+  disconnect,
+  setToken,
+  publish,
+  rpc,
+  isConnected,
+  getSubscriptions,
+  getConnectionState,
+  addSubscription,
+  removeSubscription,
+  onConnecting,
+  onConnected,
+  onDisconnected,
+  onError,
+  onSubscribed,
+  onUnsubscribed,
+  onSubscribing,
+  onPublication,
+  helpers,
+  utils
+} from 'tauri-plugin-centrifugo-api'
 
 import type { UnlistenFn } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
 
-  let url = 'ws://localhost:8000/connection/websocket'
+  let url = 'ws://localhost:8001/connection/websocket'
   let token = ''
   let clientName = 'test-client'
   let channels = 'test,echo'
@@ -36,6 +36,7 @@ import { invoke } from '@tauri-apps/api/core'
   let connectionStatus = 'Disconnected'
   let subscriptions: Record<string, boolean> = {}
   let eventLog = ''
+  let errorLog = ''
   
   // RPC
   let rpcMethod = 'getUserInfo'
@@ -48,25 +49,25 @@ import { invoke } from '@tauri-apps/api/core'
   let publishResult = ''
   
   // Subscription management
-  let newChannel = ''
+  let newChannel = 'info'
   let subscriptionResult = ''
 
   let unlisteners: UnlistenFn[] = []
 
-  onMount(async () => {
-    // Ждем секунду для загрузки Tauri API
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    
-    // Настраиваем event listeners
-    await setupEventListeners()
-    loadSavedConfig()
+  onMount(() => {
+    // Wait a second for Tauri API to load
+    setTimeout(async () => {
+      // Setup event listeners
+      await setupEventListeners()
+      loadSavedConfig()
+    }, 1000)
     
     return () => {
       unlisteners.forEach(unlisten => unlisten())
     }
   })
 
-  // Убираю сложную функцию waitForTauri
+  // Remove complex waitForTauri function
 
   async function setupEventListeners() {
     try {
@@ -76,58 +77,67 @@ import { invoke } from '@tauri-apps/api/core'
         await onConnecting((eventData) => {
           const data = eventData.payload
           connectionStatus = 'Connecting...'
-          addToLog(`Connecting... ${JSON.stringify(data)}`)
+          addToLog(`🔄 onConnecting: Attempting to connect to server...`)
+          addToLog(`🔍 Event data: ${JSON.stringify(data)}`)
         }),
         
         await onConnected((eventData) => {
           const data = eventData.payload
           connectionStatus = 'Connected'
-          addToLog(`Connected! ${JSON.stringify(data)}`)
+          addToLog(`✅ onConnected: Successfully connected to server!`)
+          addToLog(`🔍 Event data: ${JSON.stringify(data)}`)
         }),
         
         await onDisconnected((eventData) => {
           const data = eventData.payload
           connectionStatus = 'Disconnected'
-          addToLog(`Disconnected: ${JSON.stringify(data)}`)
+          addToLog(`❌ onDisconnected: Disconnected from server`)
+          addToLog(`🔍 Event data: ${JSON.stringify(data)}`)
         }),
         
         await onError((eventData) => {
           const data = eventData.payload
           connectionStatus = 'Error'
-          addToLog(`Error: ${data.error}`)
+          addToLog(`💥 onError: Connection error: ${data.error}`)
+          addToErrorLog(`❌ Connection Error: ${data.error}`)
         }),
         
         await onSubscribed((eventData) => {
           const data = eventData.payload
           subscriptions[data.channel] = true
           subscriptions = { ...subscriptions }
-          addToLog(`Subscribed to ${data.channel}`)
+          addToLog(`✅ onSubscribed: Subscription to channel ${data.channel} successfully established`)
+          addToLog(`🔍 Event data: ${JSON.stringify(eventData, null, 2)}`)
         }),
         
         await onUnsubscribed((eventData) => {
           const data = eventData.payload
           subscriptions[data.channel] = false
           subscriptions = { ...subscriptions }
-          addToLog(`Unsubscribed from ${data.channel}`)
+          addToLog(`❌ onUnsubscribed: Unsubscribed from channel ${data.channel}`)
+          addToLog(`🔍 Event data: ${JSON.stringify(eventData, null, 2)}`)
         }),
         
         await onSubscribing((eventData) => {
           const data = eventData.payload
-          addToLog(`Subscribing to ${data.channel}...`)
+          addToLog(`🔄 onSubscribing: Attempting to subscribe to channel ${data.channel}...`)
+          addToLog(`🔍 Event data: ${JSON.stringify(eventData, null, 2)}`)
         }),
         
         await onPublication((eventData) => {
           try {
             const data = eventData.payload
-            addToLog(`📨 Publication on ${data.channel}`)
+            addToLog(`📨 onPublication: Message received on channel ${data.channel}`)
+            // addToLog(`🔍 Event data: ${JSON.stringify(eventData, null, 2)}`)
             
-            // Проверяем, есть ли данные
+            // Check if there is data
             if (data.data) {
               try {
                 const decodedData = utils.decodeJson(data.data)
                 addToLog(`📄 Decoded data: ${JSON.stringify(decodedData, null, 2)}`)
               } catch (decodeError) {
                 addToLog(`📄 Raw data (base64): ${data.data}`)
+                addToLog(`📄 Decode error: ${decodeError}`)
               }
             } else {
               addToLog(`📄 No data in publication`)
@@ -136,7 +146,9 @@ import { invoke } from '@tauri-apps/api/core'
             addToLog(`❌ Error processing publication: ${error}`)
             addToLog(`🔍 Raw event data: ${JSON.stringify(eventData, null, 2)}`)
           }
-        })
+        }),
+
+
       ]
       
       addToLog('✅ Event listeners setup complete')
@@ -168,17 +180,34 @@ import { invoke } from '@tauri-apps/api/core'
     const timestamp = new Date().toLocaleTimeString()
     const logMessage = `[${timestamp}] ${message}`
     
-    // Печатаем в консоль
-    console.log(logMessage)
+          // Print to console
+      console.log(logMessage)
+      
+      // Add to UI log
+      eventLog += logMessage + '\n'
+      
+      // Limit log size (last 500 lines)
+      const lines = eventLog.split('\n')
+      if (lines.length > 500) {
+        eventLog = lines.slice(-500).join('\n')
+      }
+  }
+
+  function addToErrorLog(message: string) {
+    const timestamp = new Date().toLocaleTimeString()
+    const logMessage = `[${timestamp}] ${message}`
     
-    // Добавляем в UI лог
-    eventLog += logMessage + '\n'
-    
-    // Ограничиваем размер лога (последние 500 строк)
-    const lines = eventLog.split('\n')
-    if (lines.length > 500) {
-      eventLog = lines.slice(-500).join('\n')
-    }
+          // Print to console
+      console.error(logMessage)
+      
+      // Add to error log UI
+      errorLog += logMessage + '\n'
+      
+      // Limit error log size (last 200 lines)
+      const lines = errorLog.split('\n')
+      if (lines.length > 200) {
+        errorLog = lines.slice(-200).join('\n')
+      }
   }
 
   async function connectToCentrifugo() {
@@ -193,6 +222,8 @@ import { invoke } from '@tauri-apps/api/core'
       const channelList = channels.split(',').map(c => c.trim()).filter(c => c)
       addToLog(`📋 Parsed channels: [${channelList.join(', ')}]`)
       
+      addToLog(`🔌 Connecting to channels: [${channelList.join(', ')}]`)
+      
       await connect({
         url,
         token: token || undefined,
@@ -204,6 +235,16 @@ import { invoke } from '@tauri-apps/api/core'
       
       saveConfig()
       addToLog('✅ Connection started successfully')
+      
+      // Check subscriptions after connection
+      setTimeout(async () => {
+        try {
+          const subs = await getSubscriptions()
+          addToLog(`📡 Current subscriptions: ${JSON.stringify(subs, null, 2)}`)
+        } catch (error) {
+          addToLog(`❌ Error getting subscriptions: ${error}`)
+        }
+      }, 1000)
     } catch (error) {
       addToLog(`❌ Failed to start connection: ${error}`)
     }
@@ -258,9 +299,38 @@ import { invoke } from '@tauri-apps/api/core'
     }
   }
 
+  async function checkAllSubscriptions() {
+    try {
+      addToLog('🔍 Checking all subscriptions and listeners...')
+      
+      const subs = await getSubscriptions()
+      addToLog(`📡 Active subscriptions: ${JSON.stringify(subs, null, 2)}`)
+      
+      const connected = await isConnected()
+      addToLog(`🔌 Connection status: ${connected}`)
+      
+      const state = await getConnectionState()
+      addToLog(`📊 Connection state: ${state}`)
+      
+      addToLog(`🎧 Number of active listeners: ${unlisteners.length}`)
+      
+      // Check each channel
+      for (const [channel, subscribed] of Object.entries(subs)) {
+        if (subscribed) {
+          addToLog(`✅ Channel ${channel}: subscribed`)
+        } else {
+          addToLog(`❌ Channel ${channel}: not subscribed`)
+        }
+      }
+      
+    } catch (error) {
+      addToLog(`❌ Check error: ${error}`)
+    }
+  }
+
   async function publishMessage() {
     try {
-      // Проверяем состояние соединения
+      // Check connection status
       const connected = await isConnected()
       if (!connected) {
         addToLog('Cannot publish: not connected to server')
@@ -273,7 +343,7 @@ import { invoke } from '@tauri-apps/api/core'
       addToLog(`Publishing message to channel: ${channel}`)
       addToLog(`Message content: "${message}"`)
       
-      // Используем helpers.publishJson для правильной работы
+      // Use helpers.publishJson for proper operation
       await helpers.publishJson(channel, { 
         text: message, 
         timestamp: Date.now(),
@@ -307,7 +377,7 @@ import { invoke } from '@tauri-apps/api/core'
       addToLog(`Executing RPC method: ${rpcMethod}`)
       addToLog(`RPC data: ${rpcData}`)
       
-      // Используем helpers.rpcJson для правильной работы
+      // Use helpers.rpcJson for proper operation
       const data = JSON.parse(rpcData)
       const result = await helpers.rpcJson(rpcMethod, data)
       
@@ -332,12 +402,20 @@ import { invoke } from '@tauri-apps/api/core'
 
   async function addNewSubscription() {
     try {
+      addToLog(`🔄 Adding subscription to channel: ${newChannel}`)
+      
       await addSubscription(newChannel)
       subscriptionResult = `Subscribed to ${newChannel}`
-      addToLog(`Added subscription to ${newChannel}`)
+      addToLog(`✅ Subscription to channel ${newChannel} successfully added`)
+      addToLog(`🎧 Event handlers configured automatically`)
+      addToLog(`📡 Expected events: onSubscribing → onSubscribed → onPublication`)
+      
+      // Update UI
+      subscriptions[newChannel] = true
+      subscriptions = { ...subscriptions }
       newChannel = ''
     } catch (error) {
-      addToLog(`Failed to add subscription: ${error}`)
+      addToLog(`❌ Error adding subscription: ${error}`)
     }
   }
 
@@ -346,8 +424,68 @@ import { invoke } from '@tauri-apps/api/core'
       await removeSubscription(channel)
       subscriptionResult = `Unsubscribed from ${channel}`
       addToLog(`Removed subscription from ${channel}`)
+      
+      // Update UI
+      subscriptions[channel] = false
+      subscriptions = { ...subscriptions }
+      
+      addToLog(`✅ Unsubscribed from channel ${channel}`)
+      addToLog(`🎧 Event handlers cleared automatically`)
     } catch (error) {
       addToLog(`Failed to remove subscription: ${error}`)
+    }
+  }
+
+  async function refreshSubscriptionsList() {
+    try {
+      addToLog('🔄 Refreshing subscriptions list...')
+      
+      // Check connection status
+      const connected = await isConnected()
+      if (!connected) {
+        addToLog('❌ Not connected to server')
+        return
+      }
+      
+      // Get current subscriptions list
+      const subs = await getSubscriptions()
+      addToLog(`📡 Current subscriptions: ${JSON.stringify(subs, null, 2)}`)
+      
+      // Update UI
+      subscriptions = subs
+      
+      addToLog('✅ Subscriptions list updated')
+    } catch (error) {
+      addToLog(`❌ Error updating subscriptions: ${error}`)
+    }
+  }
+
+  async function testChannelMessage(channel: string) {
+    try {
+      addToLog(`🧪 Testing message reception on channel: ${channel}`)
+      
+      // Check connection status
+      const connected = await isConnected()
+      if (!connected) {
+        addToLog('❌ Cannot test: not connected to server')
+        return
+      }
+      
+      // Publish test message to specific channel
+      const testData = { 
+        type: 'test', 
+        message: `Test message for ${channel}`, 
+        timestamp: Date.now(),
+        client: clientName,
+        channel: channel
+      }
+      
+      addToLog(`📤 Publishing test message to ${channel}`)
+      await helpers.publishJson(channel, testData)
+      addToLog('✅ Test message published, check the log above for reception')
+      
+    } catch (error) {
+      addToLog(`❌ Test failed: ${error}`)
     }
   }
 
@@ -355,18 +493,18 @@ import { invoke } from '@tauri-apps/api/core'
     try {
       addToLog('🧪 Testing message reception...')
       
-      // Проверяем состояние соединения
+      // Check connection status
       const connected = await isConnected()
       if (!connected) {
         addToLog('❌ Cannot test: not connected to server')
         return
       }
       
-      // Получаем текущие подписки
+      // Get current subscriptions
       const subs = await getSubscriptions()
       addToLog(`📡 Current subscriptions: ${Object.keys(subs).join(', ')}`)
       
-      // Публикуем тестовое сообщение
+      // Publish test message
       const channel = channels.split(',')[0]?.trim() || 'test'
       const testData = { 
         type: 'test', 
@@ -396,7 +534,11 @@ import { invoke } from '@tauri-apps/api/core'
 
   function clearLog() {
     eventLog = ''
-	}
+  }
+
+  function clearErrorLog() {
+    errorLog = ''
+  }
 </script>
 
 <main>
@@ -446,6 +588,7 @@ import { invoke } from '@tauri-apps/api/core'
         <button on:click={checkConnectionStatus} class="btn btn-secondary">Check Status</button>
         <button on:click={getConnectionStateInfo} class="btn btn-secondary">Get State</button>
         <button on:click={getSubscriptionsInfo} class="btn btn-secondary">Get Subscriptions</button>
+        <button on:click={checkAllSubscriptions} class="btn btn-secondary">Check All</button>
       </div>
       
       <div class="status">
@@ -501,11 +644,20 @@ import { invoke } from '@tauri-apps/api/core'
     <!-- Subscription Management -->
     <section class="action-section">
       <h2>📡 Subscription Management</h2>
+      <div class="info-box">
+        <p><strong>ℹ️ How it works:</strong></p>
+        <ul>
+          <li>When adding a subscription, all event handlers are automatically configured</li>
+          <li>New subscriptions immediately start receiving messages without reconnection</li>
+          <li>Use the "Test" button to verify the operation of a specific channel</li>
+        </ul>
+      </div>
       <div class="form-group">
         <label for="newChannel">New Channel:</label>
         <input id="newChannel" type="text" bind:value={newChannel} placeholder="channel-name" />
         <button on:click={addNewSubscription} class="btn btn-success">Add Subscription</button>
-  </div>
+        <button on:click={refreshSubscriptionsList} class="btn btn-secondary">🔄 Refresh Subscriptions List</button>
+      </div>
 
       {#if Object.keys(subscriptions).length > 0}
         <div class="subscriptions">
@@ -518,6 +670,7 @@ import { invoke } from '@tauri-apps/api/core'
               </span>
               {#if subscribed}
                 <button on:click={() => removeSubscriptionChannel(channel)} class="btn btn-sm btn-danger">Unsubscribe</button>
+                <button on:click={() => testChannelMessage(channel)} class="btn btn-sm btn-info">Test</button>
               {/if}
             </div>
           {/each}
@@ -539,6 +692,17 @@ import { invoke } from '@tauri-apps/api/core'
       </div>
       <div class="log-container">
         <pre class="log-content" contenteditable="true" bind:innerHTML={eventLog}></pre>
+      </div>
+    </section>
+
+    <!-- Error Log -->
+    <section class="log-section error-log-section">
+      <h2>❌ Error Log</h2>
+      <div class="log-controls">
+        <button on:click={clearErrorLog} class="btn btn-danger">Clear Error Log</button>
+      </div>
+      <div class="log-container error-log-container">
+        <pre class="log-content error-log-content" contenteditable="true" bind:innerHTML={errorLog}></pre>
       </div>
     </section>
   </div>
@@ -585,6 +749,10 @@ import { invoke } from '@tauri-apps/api/core'
 
   .log-section {
     border-left: 4px solid #ffc107;
+  }
+
+  .error-log-section {
+    border-left: 4px solid #dc3545;
   }
 
   h2 {
@@ -750,6 +918,39 @@ import { invoke } from '@tauri-apps/api/core'
   
   .log-content::-webkit-scrollbar-thumb:hover {
     background: #555;
+  }
+
+  .error-log-container {
+    background: #2d1b1b;
+    border: 1px solid #dc3545;
+  }
+
+  .error-log-content {
+    color: #ff6b6b;
+  }
+
+  .info-box {
+    background: #e3f2fd;
+    border: 1px solid #2196f3;
+    border-radius: 4px;
+    padding: 15px;
+    margin-bottom: 20px;
+  }
+
+  .info-box p {
+    margin: 0 0 10px 0;
+    color: #1976d2;
+    font-weight: 500;
+  }
+
+  .info-box ul {
+    margin: 0;
+    padding-left: 20px;
+    color: #424242;
+  }
+
+  .info-box li {
+    margin-bottom: 5px;
   }
 
   @media (max-width: 768px) {

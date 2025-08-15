@@ -1,6 +1,6 @@
 {
   "name": "tauri-plugin-centrifugo-api",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "author": "s00d",
   "description": "Tauri plugin for Centrifugo real-time communication using tokio-centrifuge",
   "repository": "https://github.com/s00d/tauri-plugin-centrifugo",

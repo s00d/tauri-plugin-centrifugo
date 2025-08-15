@@ -258,7 +258,7 @@ export const onSubscribing = async (callback: (data: TauriEventWrapper<ChannelSt
 export const onPublication = async (callback: (data: TauriEventWrapper<PublicationData>) => void): Promise<UnlistenFn> => 
   await onCentrifugoEvent('publication', callback)
 
-// Удобные event listeners для сообщений
+// Convenient event listeners for messages
 export const onMessage = async (callback: (data: { channel: string; data: any }) => void): Promise<UnlistenFn> => 
   await onCentrifugoEvent('publication', (pubData: TauriEventWrapper<PublicationData>) => {
     try {
@@ -268,7 +268,7 @@ export const onMessage = async (callback: (data: { channel: string; data: any })
         data: decodedData
       })
     } catch (error) {
-      // Если не удалось декодировать JSON, возвращаем raw данные
+              // If failed to decode JSON, return raw data
       callback({
         channel: pubData.payload.channel,
         data: pubData.payload.data
@@ -283,7 +283,7 @@ export const onChannelMessage = async (channel: string, callback: (data: any) =>
         const decodedData = utils.decodeJson(pubData.payload.data)
         callback(decodedData)
       } catch (error) {
-        // Если не удалось декодировать JSON, возвращаем raw данные
+        // If failed to decode JSON, return raw data
         callback(pubData.payload.data)
       }
     }

@@ -133,12 +133,14 @@ impl Centrifugo {
         app: AppHandle<R>,
         config: StartConfig,
     ) -> Result<()> {
-        // Останавливаем предыдущее подключение, если есть
+        // Stop previous connection if exists
         if let Ok(mut guard) = self.client_task.lock() {
             if let Some(handle) = guard.take() {
                 handle.abort();
             }
         }
+
+
 
         let runtime = self.runtime.clone();
         let client_task = self.client_task.clone();
@@ -179,7 +181,7 @@ impl Centrifugo {
 
         let cf_client = Client::new(&url, cf_config);
 
-        // Настройка callbacks для подключения
+        // Setup callbacks for connection
         let app_clone = app.clone();
         cf_client.on_connecting(move || {
             println!("DEBUG: on_connecting callback called");
@@ -216,15 +218,15 @@ impl Centrifugo {
             );
         });
 
-        // Сохраняем клиент
+        // Save client
         if let Ok(mut guard) = client.lock() {
             *guard = Some(cf_client.clone());
         }
 
-        // Подключаемся к серверу
+        // Connect to server
         let _ = cf_client.connect().await;
 
-        // Подписываемся на каналы
+        // Subscribe to channels
         for channel in &config.channels {
             let _ = app.emit(
                 "centrifugo:subscribing",
@@ -272,7 +274,7 @@ impl Centrifugo {
                 );
             });
 
-            // Обновляем статус подписки
+            // Update subscription status
             if let Ok(mut guard) = subscriptions.lock() {
                 guard.insert(channel.clone(), true);
             }
@@ -408,7 +410,7 @@ impl Centrifugo {
         };
         
         if let Some(client) = client {
-            // Проверяем состояние соединения
+            // Check connection status
             if client.state() != tokio_centrifuge::client::State::Connected {
                 return Err(crate::error::Error::NotConnected);
             }
@@ -455,62 +457,34 @@ impl Centrifugo {
         client
     }
 
-    /// Get current channel subscriptions
-    ///
-    /// This method returns a map of channel names to their subscription status.
-    /// The status indicates whether the channel is actively subscribed to
-    /// and receiving messages.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(HashMap<String, bool>)` - Channel name to subscription status mapping
-    /// - `Err(Error)` if subscription retrieval fails
-    ///
-    /// # Subscription Status
-    ///
-    /// - `true` - Channel is subscribed to and active
-    /// - `false` - Channel is not subscribed to
-    ///
-    /// # Thread Safety
-    ///
-    /// The method safely accesses the shared subscription state using
-    /// proper locking mechanisms to prevent race conditions.
-    ///
-    /// # Usage
-    ///
-    /// Use this method to monitor which channels are currently active
-    /// and to provide user feedback about subscription status.
     pub async fn get_subscriptions(&self) -> Result<HashMap<String, bool>> {
+        // Get current state from local cache
         let guard = self.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
-        Ok(guard.clone())
+        let mut subscriptions = guard.clone();
+        
+        // Check client state for synchronization
+        let client = {
+            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(client) = &*client_guard {
+                Some(client.clone())
+            } else {
+                None
+            }
+        };
+        
+        // If client is not connected, clear all subscriptions
+        if client.is_none() || client.as_ref().unwrap().state() != tokio_centrifuge::client::State::Connected {
+            subscriptions.clear();
+            
+            // Update local cache
+            if let Ok(mut guard) = self.subscriptions.lock() {
+                *guard = subscriptions.clone();
+            }
+        }
+        
+        Ok(subscriptions)
     }
 
-    /// Get detailed connection state
-    ///
-    /// This method returns a human-readable string representation of the
-    /// current connection state. It provides more detailed information
-    /// than the boolean `is_connected()` method.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(String)` - Connection state description
-    /// - `Err(Error)` if state retrieval fails
-    ///
-    /// # State Values
-    ///
-    /// - `"connected"` - Successfully connected and ready
-    /// - `"connecting"` - Connection attempt in progress
-    /// - `"disconnected"` - Not connected or connection failed
-    ///
-    /// # State Source
-    ///
-    /// The state is retrieved from the tokio-centrifuge client's
-    /// internal state machine, providing accurate real-time information.
-    ///
-    /// # Usage
-    ///
-    /// Use this method for detailed connection monitoring and
-    /// user interface state display.
     pub async fn get_connection_state(&self) -> Result<String> {
         let client = {
             let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
@@ -528,123 +502,117 @@ impl Centrifugo {
         client
     }
 
-    /// Add a new channel subscription
-    ///
-    /// This method adds a channel to the internal subscription tracking.
-    /// Note that in tokio-centrifuge, subscriptions are created during
-    /// the initial connection process, so this method only updates
-    /// the internal state tracking.
-    ///
-    /// # Parameters
-    ///
-    /// - `channel`: Channel name to subscribe to
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())` on successful subscription addition
-    /// - `Err(Error)` if subscription addition fails
-    ///
-    /// # Implementation Note
-    ///
-    /// This method only updates internal state tracking. For actual
-    /// channel subscriptions, use the `connect()` method with the
-    /// desired channels in the configuration.
-    ///
-    /// # Thread Safety
-    ///
-    /// The method safely updates the shared subscription state using
-    /// proper locking mechanisms.
-    pub async fn add_subscription(&self, channel: String) -> Result<()> {
-        // В tokio-centrifuge подписки создаются при подключении
-        // Здесь мы просто обновляем статус
-        if let Ok(mut guard) = self.subscriptions.lock() {
-            guard.insert(channel, true);
+    pub async fn add_subscription<R: Runtime>(&self, app: AppHandle<R>, channel: String) -> Result<()> {
+        // Check if client is connected
+        let client = {
+            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(client) = &*client_guard {
+                Some(client.clone())
+            } else {
+                return Err(crate::error::Error::NotConnected);
+            }
+        };
+
+        if let Some(client) = client {
+            // Create new subscription with event handlers
+            let subscription = client.new_subscription(&channel);
+            
+            // Setup event handlers for new subscription
+            let app_clone = app.clone();
+            let channel_name = channel.clone();
+            subscription.on_subscribed(move || {
+                let _ = app_clone.emit(
+                    "centrifugo:subscribed",
+                    serde_json::json!({"channel": channel_name}),
+                );
+            });
+
+            let app_clone = app.clone();
+            let channel_name = channel.clone();
+            subscription.on_unsubscribed(move || {
+                let _ = app_clone.emit(
+                    "centrifugo:unsubscribed",
+                    serde_json::json!({"channel": channel_name}),
+                );
+            });
+
+            let app_clone = app.clone();
+            let channel_name = channel.clone();
+            subscription.on_subscribing(move || {
+                let _ = app_clone.emit(
+                    "centrifugo:subscribing",
+                    serde_json::json!({"channel": channel_name}),
+                );
+            });
+
+            let app_clone = app.clone();
+            let channel_name = channel.clone();
+            subscription.on_publication(move |data| {
+                let _ = app_clone.emit(
+                    "centrifugo:publication",
+                    serde_json::json!({
+                        "channel": channel_name,
+                        "data": BASE64.encode(&data.data)
+                    }),
+                );
+            });
+
+            // Subscribe to channel
+            if let Err(e) = subscription.subscribe().await {
+                return Err(crate::error::Error::RequestError(format!("Failed to subscribe to {}: {:?}", channel, e)));
+            }
+
+            // Update subscription status
+            if let Ok(mut guard) = self.subscriptions.lock() {
+                guard.insert(channel, true);
+            }
+
+            Ok(())
+        } else {
+            Err(crate::error::Error::NotConnected)
         }
-        Ok(())
     }
 
-    /// Remove a channel subscription
-    ///
-    /// This method removes a channel from the internal subscription tracking.
-    /// It updates the local state but does not affect the actual
-    /// tokio-centrifuge subscription.
-    ///
-    /// # Parameters
-    ///
-    /// - `channel`: Channel name to unsubscribe from
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())` on successful subscription removal
-    /// - `Err(Error)` if subscription removal fails
-    ///
-    /// # Implementation Note
-    ///
-    /// This method only updates internal state tracking. For actual
-    /// channel unsubscriptions, you may need to reconnect with a
-    /// modified channel list.
-    ///
-    /// # Thread Safety
-    ///
-    /// The method safely updates the shared subscription state using
-    /// proper locking mechanisms.
-    pub async fn remove_subscription(&self, channel: String) -> Result<()> {
-        if let Ok(mut guard) = self.subscriptions.lock() {
-            guard.remove(&channel);
+
+    pub async fn remove_subscription<R: Runtime>(&self, app: AppHandle<R>, channel: String) -> Result<()> {
+        // Check if client is connected
+        let client = {
+            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(client) = &*client_guard {
+                Some(client.clone())
+            } else {
+                return Err(crate::error::Error::NotConnected);
+            }
+        };
+
+        if let Some(client) = client {
+            // Create subscription for unsubscribing
+            let subscription = client.new_subscription(&channel);
+            
+            // Setup event handlers for unsubscribing
+            let app_clone = app.clone();
+            let channel_name = channel.clone();
+            subscription.on_unsubscribed(move || {
+                let _ = app_clone.emit(
+                    "centrifugo:unsubscribed",
+                    serde_json::json!({"channel": channel_name}),
+                );
+            });
+            
+            // Unsubscribe from channel
+            subscription.unsubscribe().await;
+
+            // Update subscription status
+            if let Ok(mut guard) = self.subscriptions.lock() {
+                guard.remove(&channel);
+            }
+
+            Ok(())
+        } else {
+            Err(crate::error::Error::NotConnected)
         }
-        Ok(())
     }
 
-    /// Execute an RPC method on the Centrifugo server
-    ///
-    /// This method sends an RPC request to the server and waits for the response.
-    /// The request data should be base64-encoded and will be decoded before
-    /// sending to the server.
-    ///
-    /// # Parameters
-    ///
-    /// - `request`: RPC request containing method name and base64-encoded parameters
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(String)` containing the base64-encoded response data
-    /// - `Err(Error::NotConnected)` if not connected to server
-    /// - `Err(Error::Base64Error)` if data decoding fails
-    /// - `Err(Error::RequestError)` if RPC execution fails
-    ///
-    /// # Requirements
-    ///
-    /// - Must be connected to Centrifugo server
-    /// - Method name must be valid
-    /// - Data must be valid base64-encoded content
-    ///
-    /// # Data Processing
-    ///
-    /// The method automatically decodes base64 request data and encodes
-    /// the response data, ensuring proper binary data handling.
-    ///
-    /// # Usage
-    ///
-    /// Use this method for server-side method execution, such as
-    /// user authentication, data retrieval, or business logic operations.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use tauri_plugin_centrifugo::models::RpcRequest;
-    /// use tauri_plugin_centrifugo::core::Centrifugo;
-    ///
-    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let client = Centrifugo::new();
-    /// let request = RpcRequest {
-    ///     method: "getUserInfo".to_string(),
-    ///     data: "eyJ1c2VySWQiOiAxMjN9".to_string(), // base64 encoded
-    /// };
-    /// // Note: client must be connected before calling rpc
-    /// // let response = client.rpc(request).await?;
-    /// # Ok(())
-    /// # }
-    /// ```
     pub async fn rpc(&self, request: RpcRequest) -> Result<String> {
         let client = {
             let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
@@ -656,7 +624,7 @@ impl Centrifugo {
         };
         
         if let Some(client) = client {
-            // Проверяем состояние соединения
+            // Check connection status
             if client.state() != tokio_centrifuge::client::State::Connected {
                 return Err(crate::error::Error::NotConnected);
             }
@@ -669,229 +637,30 @@ impl Centrifugo {
         }
     }
 
-    /// Get presence information for a channel
-    ///
-    /// **Note**: This method is marked as `NotImplemented` because it's not
-    /// directly supported by the tokio-centrifuge library.
-    ///
-    /// # Parameters
-    ///
-    /// - `_request`: Presence request containing channel name (unused)
-    ///
-    /// # Returns
-    ///
-    /// - `Err(Error::NotImplemented)` - Feature not supported
-    ///
-    /// # Implementation Status
-    ///
-    /// The tokio-centrifuge library does not provide direct access to
-    /// presence information. This would require server-side support
-    /// or alternative implementation approaches.
-    ///
-    /// # Alternative Solutions
-    ///
-    /// - Use server-side presence tracking
-    /// - Implement custom presence logic
-    /// - Use alternative Centrifugo client libraries
-    ///
-    /// # Future Considerations
-    ///
-    /// This method may be implemented in future versions if tokio-centrifuge
-    /// adds support for presence functionality.
     pub async fn presence(&self, _request: PresenceRequest) -> Result<Vec<String>> {
         Err(crate::error::Error::NotImplemented("Presence not supported in tokio-centrifuge".to_string()))
     }
 
-    /// Get presence statistics for a channel
-    ///
-    /// **Note**: This method is marked as `NotImplemented` because it's not
-    /// directly supported by the tokio-centrifuge library.
-    ///
-    /// # Parameters
-    ///
-    /// - `_request`: Presence stats request containing channel name (unused)
-    ///
-    /// # Returns
-    ///
-    /// - `Err(Error::NotImplemented)` - Feature not supported
-    ///
-    /// # Implementation Status
-    ///
-    /// The tokio-centrifuge library does not provide direct access to
-    /// presence statistics. This would require server-side support
-    /// or alternative implementation approaches.
-    ///
-    /// # Alternative Solutions
-    ///
-    /// - Use server-side presence tracking
-    /// - Implement custom presence logic
-    /// - Use alternative Centrifugo client libraries
-    ///
-    /// # Future Considerations
-    ///
-    /// This method may be implemented in future versions if tokio-centrifuge
-    /// adds support for presence functionality.
     pub async fn presence_stats(&self, _request: PresenceStatsRequest) -> Result<(u32, u32)> {
         Err(crate::error::Error::NotImplemented("Presence stats not supported in tokio-centrifuge".to_string()))
     }
 
-    /// Get message history for a channel
-    ///
-    /// **Note**: This method is marked as `NotImplemented` because it's not
-    /// directly supported by the tokio-centrifuge library.
-    ///
-    /// # Parameters
-    ///
-    /// - `_request`: History request with channel and filtering options (unused)
-    ///
-    /// # Returns
-    ///
-    /// - `Err(Error::NotImplemented)` - Feature not supported
-    ///
-    /// # Implementation Status
-    ///
-    /// The tokio-centrifuge library does not provide direct access to
-    /// message history. This would require server-side support
-    /// or alternative implementation approaches.
-    ///
-    /// # Alternative Solutions
-    ///
-    /// - Use server-side history tracking
-    /// - Implement custom history logic
-    /// - Use alternative Centrifugo client libraries
-    ///
-    /// # Future Considerations
-    ///
-    /// This method may be implemented in future versions if tokio-centrifuge
-    /// adds support for history functionality.
     pub async fn history(&self, _request: HistoryRequest) -> Result<Vec<PublicationData>> {
         Err(crate::error::Error::NotImplemented("History not supported in tokio-centrifuge".to_string()))
     }
 
-    /// Send a message directly to the server
-    ///
-    /// **Note**: This method is marked as `NotImplemented` because it's not
-    /// directly supported by the tokio-centrifuge library.
-    ///
-    /// # Parameters
-    ///
-    /// - `_request`: Send request containing message data (unused)
-    ///
-    /// # Returns
-    ///
-    /// - `Err(Error::NotImplemented)` - Feature not supported
-    ///
-    /// # Implementation Status
-    ///
-    /// The tokio-centrifuge library does not provide direct access to
-    /// server message sending. This would require server-side support
-    /// or alternative implementation approaches.
-    ///
-    /// # Alternative Solutions
-    ///
-    /// - Use server-side message handling
-    /// - Implement custom message logic
-    /// - Use alternative Centrifugo client libraries
-    ///
-    /// # Future Considerations
-    ///
-    /// This method may be implemented in future versions if tokio-centrifuge
-    /// adds support for server message functionality.
     pub async fn send(&self, _request: SendRequest) -> Result<()> {
         Err(crate::error::Error::NotImplemented("Send not supported in tokio-centrifuge".to_string()))
     }
 
-    /// Refresh the authentication token
-    ///
-    /// **Note**: This method is marked as `NotImplemented` because it's not
-    /// directly supported by the tokio-centrifuge library.
-    ///
-    /// # Parameters
-    ///
-    /// - `_request`: Refresh request containing new token (unused)
-    ///
-    /// # Returns
-    ///
-    /// - `Err(Error::NotImplemented)` - Feature not supported
-    ///
-    /// # Implementation Status
-    ///
-    /// The tokio-centrifuge library does not provide direct access to
-    /// token refresh functionality. This would require server-side support
-    /// or alternative implementation approaches.
-    ///
-    /// # Alternative Solutions
-    ///
-    /// - Use server-side token refresh
-    /// - Implement custom token logic
-    /// - Use alternative Centrifugo client libraries
-    ///
-    /// # Future Considerations
-    ///
-    /// This method may be implemented in future versions if tokio-centrifuge
-    /// adds support for token refresh functionality.
     pub async fn refresh(&self, _request: RefreshRequest) -> Result<()> {
         Err(crate::error::Error::NotImplemented("Refresh not supported in tokio-centrifuge".to_string()))
     }
 
-    /// Refresh a subscription token for a specific channel
-    ///
-    /// **Note**: This method is marked as `NotImplemented` because it's not
-    /// directly supported by the tokio-centrifuge library.
-    ///
-    /// # Parameters
-    ///
-    /// - `_request`: Sub refresh request containing channel and new token (unused)
-    ///
-    /// # Returns
-    ///
-    /// - `Err(Error::NotImplemented)` - Feature not supported
-    ///
-    /// # Implementation Status
-    ///
-    /// The tokio-centrifuge library does not provide direct access to
-    /// subscription token refresh functionality. This would require server-side support
-    /// or alternative implementation approaches.
-    ///
-    /// # Alternative Solutions
-    ///
-    /// - Use server-side subscription token refresh
-    /// - Implement custom subscription logic
-    /// - Use alternative Centrifugo client libraries
-    ///
-    /// # Future Considerations
-    ///
-    /// This method may be implemented in future versions if tokio-centrifuge
-    /// adds support for subscription token refresh functionality.
     pub async fn sub_refresh(&self, _request: SubRefreshRequest) -> Result<()> {
         Err(crate::error::Error::NotImplemented("Sub refresh not supported in tokio-centrifuge".to_string()))
     }
 
-    /// Ping the Centrifugo server
-    ///
-    /// **Note**: This method is marked as `NotImplemented` because it's not
-    /// directly supported by the tokio-centrifuge library.
-    ///
-    /// # Returns
-    ///
-    /// - `Err(Error::NotImplemented)` - Feature not supported
-    ///
-    /// # Implementation Status
-    ///
-    /// The tokio-centrifuge library does not provide direct access to
-    /// ping functionality. This would require server-side support
-    /// or alternative implementation approaches.
-    ///
-    /// # Alternative Solutions
-    ///
-    /// - Use server-side ping functionality
-    /// - Implement custom ping logic
-    /// - Use alternative Centrifugo client libraries
-    ///
-    /// # Future Considerations
-    ///
-    /// This method may be implemented in future versions if tokio-centrifuge
-    /// adds support for ping functionality.
     pub async fn ping(&self) -> Result<()> {
         Err(crate::error::Error::NotImplemented("Ping not supported in tokio-centrifuge".to_string()))
     }

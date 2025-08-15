@@ -396,7 +396,7 @@ pub async fn add_subscription<R: Runtime>(
     channel: String,
 ) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
-    centrifugo.add_subscription(channel).await
+    centrifugo.add_subscription(window.app_handle().clone(), channel).await
 }
 
 /// Remove a channel subscription
@@ -422,5 +422,5 @@ pub async fn remove_subscription<R: Runtime>(
     channel: String,
 ) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
-    centrifugo.remove_subscription(channel).await
+    centrifugo.remove_subscription(window.app_handle().clone(), channel).await
 }
