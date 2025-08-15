@@ -27,8 +27,8 @@
 //! Methods return `Result<T>` with custom error types that provide
 //! meaningful error messages for debugging and user feedback.
 
-use crate::models::*;
 use crate::error::Result;
+use crate::models::*;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde_json;
@@ -90,9 +90,7 @@ impl Centrifugo {
     /// This method will panic if it cannot create a Tokio runtime.
     /// This should only happen in environments where Tokio is not supported.
     pub fn new() -> Self {
-        let runtime = Arc::new(
-            TokioRuntime::new().expect("Failed to create Tokio runtime")
-        );
+        let runtime = Arc::new(TokioRuntime::new().expect("Failed to create Tokio runtime"));
         Self {
             runtime,
             client_task: Arc::new(Mutex::new(None)),
@@ -128,11 +126,7 @@ impl Centrifugo {
     ///
     /// This method spawns a background task to manage the connection lifecycle.
     /// The task handles WebSocket communication, event processing, and state updates.
-    pub async fn connect<R: Runtime>(
-        &self,
-        app: AppHandle<R>,
-        config: StartConfig,
-    ) -> Result<()> {
+    pub async fn connect<R: Runtime>(&self, app: AppHandle<R>, config: StartConfig) -> Result<()> {
         // Stop previous connection if exists
         if let Ok(mut guard) = self.client_task.lock() {
             if let Some(handle) = guard.take() {
@@ -140,13 +134,11 @@ impl Centrifugo {
             }
         }
 
-
-
         let runtime = self.runtime.clone();
         let client_task = self.client_task.clone();
         let client = self.client.clone();
         let subscriptions = self.subscriptions.clone();
-        
+
         let handle = runtime.spawn(async move {
             Self::run_client(app, config, client, subscriptions).await;
         });
@@ -232,9 +224,9 @@ impl Centrifugo {
                 "centrifugo:subscribing",
                 serde_json::json!({"channel": channel}),
             );
-            
+
             let subscription = cf_client.new_subscription(channel);
-            
+
             let app_clone = app.clone();
             let channel_name = channel.clone();
             subscription.on_subscribed(move || {
@@ -363,7 +355,7 @@ impl Centrifugo {
                 None
             }
         };
-        
+
         if let Some(client) = client {
             client.set_token(token);
             Ok(())
@@ -408,13 +400,13 @@ impl Centrifugo {
                 None
             }
         };
-        
+
         if let Some(client) = client {
             // Check connection status
             if client.state() != tokio_centrifuge::client::State::Connected {
                 return Err(crate::error::Error::NotConnected);
             }
-            
+
             let data = BASE64.decode(&request.data)?;
             client.publish(&request.channel, data).await?;
             Ok(())
@@ -453,7 +445,7 @@ impl Centrifugo {
                 Ok(false)
             }
         };
-        
+
         client
     }
 
@@ -461,7 +453,7 @@ impl Centrifugo {
         // Get current state from local cache
         let guard = self.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
         let mut subscriptions = guard.clone();
-        
+
         // Check client state for synchronization
         let client = {
             let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
@@ -471,17 +463,19 @@ impl Centrifugo {
                 None
             }
         };
-        
+
         // If client is not connected, clear all subscriptions
-        if client.is_none() || client.as_ref().unwrap().state() != tokio_centrifuge::client::State::Connected {
+        if client.is_none()
+            || client.as_ref().unwrap().state() != tokio_centrifuge::client::State::Connected
+        {
             subscriptions.clear();
-            
+
             // Update local cache
             if let Ok(mut guard) = self.subscriptions.lock() {
                 *guard = subscriptions.clone();
             }
         }
-        
+
         Ok(subscriptions)
     }
 
@@ -498,11 +492,15 @@ impl Centrifugo {
                 Ok("disconnected".to_string())
             }
         };
-        
+
         client
     }
 
-    pub async fn add_subscription<R: Runtime>(&self, app: AppHandle<R>, channel: String) -> Result<()> {
+    pub async fn add_subscription<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        channel: String,
+    ) -> Result<()> {
         // Check if client is connected
         let client = {
             let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
@@ -516,7 +514,7 @@ impl Centrifugo {
         if let Some(client) = client {
             // Create new subscription with event handlers
             let subscription = client.new_subscription(&channel);
-            
+
             // Setup event handlers for new subscription
             let app_clone = app.clone();
             let channel_name = channel.clone();
@@ -559,7 +557,10 @@ impl Centrifugo {
 
             // Subscribe to channel
             if let Err(e) = subscription.subscribe().await {
-                return Err(crate::error::Error::RequestError(format!("Failed to subscribe to {}: {:?}", channel, e)));
+                return Err(crate::error::Error::RequestError(format!(
+                    "Failed to subscribe to {}: {:?}",
+                    channel, e
+                )));
             }
 
             // Update subscription status
@@ -573,8 +574,11 @@ impl Centrifugo {
         }
     }
 
-
-    pub async fn remove_subscription<R: Runtime>(&self, app: AppHandle<R>, channel: String) -> Result<()> {
+    pub async fn remove_subscription<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        channel: String,
+    ) -> Result<()> {
         // Check if client is connected
         let client = {
             let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
@@ -588,7 +592,7 @@ impl Centrifugo {
         if let Some(client) = client {
             // Create subscription for unsubscribing
             let subscription = client.new_subscription(&channel);
-            
+
             // Setup event handlers for unsubscribing
             let app_clone = app.clone();
             let channel_name = channel.clone();
@@ -598,7 +602,7 @@ impl Centrifugo {
                     serde_json::json!({"channel": channel_name}),
                 );
             });
-            
+
             // Unsubscribe from channel
             subscription.unsubscribe().await;
 
@@ -622,13 +626,13 @@ impl Centrifugo {
                 None
             }
         };
-        
+
         if let Some(client) = client {
             // Check connection status
             if client.state() != tokio_centrifuge::client::State::Connected {
                 return Err(crate::error::Error::NotConnected);
             }
-            
+
             let data = BASE64.decode(&request.data)?;
             let response = client.rpc(&request.method, data).await?;
             Ok(BASE64.encode(&response))
@@ -638,31 +642,45 @@ impl Centrifugo {
     }
 
     pub async fn presence(&self, _request: PresenceRequest) -> Result<Vec<String>> {
-        Err(crate::error::Error::NotImplemented("Presence not supported in tokio-centrifuge".to_string()))
+        Err(crate::error::Error::NotImplemented(
+            "Presence not supported in tokio-centrifuge".to_string(),
+        ))
     }
 
     pub async fn presence_stats(&self, _request: PresenceStatsRequest) -> Result<(u32, u32)> {
-        Err(crate::error::Error::NotImplemented("Presence stats not supported in tokio-centrifuge".to_string()))
+        Err(crate::error::Error::NotImplemented(
+            "Presence stats not supported in tokio-centrifuge".to_string(),
+        ))
     }
 
     pub async fn history(&self, _request: HistoryRequest) -> Result<Vec<PublicationData>> {
-        Err(crate::error::Error::NotImplemented("History not supported in tokio-centrifuge".to_string()))
+        Err(crate::error::Error::NotImplemented(
+            "History not supported in tokio-centrifuge".to_string(),
+        ))
     }
 
     pub async fn send(&self, _request: SendRequest) -> Result<()> {
-        Err(crate::error::Error::NotImplemented("Send not supported in tokio-centrifuge".to_string()))
+        Err(crate::error::Error::NotImplemented(
+            "Send not supported in tokio-centrifuge".to_string(),
+        ))
     }
 
     pub async fn refresh(&self, _request: RefreshRequest) -> Result<()> {
-        Err(crate::error::Error::NotImplemented("Refresh not supported in tokio-centrifuge".to_string()))
+        Err(crate::error::Error::NotImplemented(
+            "Refresh not supported in tokio-centrifuge".to_string(),
+        ))
     }
 
     pub async fn sub_refresh(&self, _request: SubRefreshRequest) -> Result<()> {
-        Err(crate::error::Error::NotImplemented("Sub refresh not supported in tokio-centrifuge".to_string()))
+        Err(crate::error::Error::NotImplemented(
+            "Sub refresh not supported in tokio-centrifuge".to_string(),
+        ))
     }
 
     pub async fn ping(&self) -> Result<()> {
-        Err(crate::error::Error::NotImplemented("Ping not supported in tokio-centrifuge".to_string()))
+        Err(crate::error::Error::NotImplemented(
+            "Ping not supported in tokio-centrifuge".to_string(),
+        ))
     }
 }
 
@@ -682,5 +700,5 @@ impl Centrifugo {
 impl Default for Centrifugo {
     fn default() -> Self {
         Self::new()
-  }
+    }
 }

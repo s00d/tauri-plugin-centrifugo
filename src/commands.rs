@@ -50,12 +50,11 @@ use tauri::{Manager, Runtime, Window};
 /// - `centrifugo:subscribed` - Channel subscriptions successful
 /// - `centrifugo:error` - Connection or subscription errors
 #[tauri::command]
-pub async fn connect<R: Runtime>(
-    window: Window<R>,
-    config: StartConfig,
-) -> Result<()> {
+pub async fn connect<R: Runtime>(window: Window<R>, config: StartConfig) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
-    centrifugo.connect(window.app_handle().clone(), config).await
+    centrifugo
+        .connect(window.app_handle().clone(), config)
+        .await
 }
 
 /// Close the connection to Centrifugo server
@@ -96,10 +95,7 @@ pub async fn disconnect<R: Runtime>(window: Window<R>) -> Result<()> {
 /// - `Ok(())` on successful token update
 /// - `Err(Error)` if token update fails
 #[tauri::command]
-pub async fn set_token<R: Runtime>(
-    window: Window<R>,
-    token: String,
-) -> Result<()> {
+pub async fn set_token<R: Runtime>(window: Window<R>, token: String) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
     centrifugo.set_token(token).await
 }
@@ -124,10 +120,7 @@ pub async fn set_token<R: Runtime>(
 /// - Must be connected to Centrifugo server
 /// - Channel must be subscribed to
 #[tauri::command]
-pub async fn publish<R: Runtime>(
-    window: Window<R>,
-    request: PublishRequest,
-) -> Result<()> {
+pub async fn publish<R: Runtime>(window: Window<R>, request: PublishRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
     centrifugo.publish(request).await
 }
@@ -151,10 +144,7 @@ pub async fn publish<R: Runtime>(
 ///
 /// - Must be connected to Centrifugo server
 #[tauri::command]
-pub async fn rpc<R: Runtime>(
-    window: Window<R>,
-    request: RpcRequest,
-) -> Result<String> {
+pub async fn rpc<R: Runtime>(window: Window<R>, request: RpcRequest) -> Result<String> {
     let centrifugo = window.state::<Centrifugo>();
     centrifugo.rpc(request).await
 }
@@ -244,10 +234,7 @@ pub async fn history<R: Runtime>(
 /// - `Ok(())` on successful send
 /// - `Err(Error::NotImplemented)` - Feature not supported
 #[tauri::command]
-pub async fn send<R: Runtime>(
-    window: Window<R>,
-    request: SendRequest,
-) -> Result<()> {
+pub async fn send<R: Runtime>(window: Window<R>, request: SendRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
     centrifugo.send(request).await
 }
@@ -267,10 +254,7 @@ pub async fn send<R: Runtime>(
 /// - `Ok(())` on successful token refresh
 /// - `Err(Error::NotImplemented)` - Feature not supported
 #[tauri::command]
-pub async fn refresh<R: Runtime>(
-    window: Window<R>,
-    request: RefreshRequest,
-) -> Result<()> {
+pub async fn refresh<R: Runtime>(window: Window<R>, request: RefreshRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
     centrifugo.refresh(request).await
 }
@@ -290,10 +274,7 @@ pub async fn refresh<R: Runtime>(
 /// - `Ok(())` on successful token refresh
 /// - `Err(Error::NotImplemented)` - Feature not supported
 #[tauri::command]
-pub async fn sub_refresh<R: Runtime>(
-    window: Window<R>,
-    request: SubRefreshRequest,
-) -> Result<()> {
+pub async fn sub_refresh<R: Runtime>(window: Window<R>, request: SubRefreshRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
     centrifugo.sub_refresh(request).await
 }
@@ -391,12 +372,11 @@ pub async fn get_connection_state<R: Runtime>(window: Window<R>) -> Result<Strin
 /// - `centrifugo:subscribed` - Subscription successful
 /// - `centrifugo:error` - Subscription errors
 #[tauri::command]
-pub async fn add_subscription<R: Runtime>(
-    window: Window<R>,
-    channel: String,
-) -> Result<()> {
+pub async fn add_subscription<R: Runtime>(window: Window<R>, channel: String) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
-    centrifugo.add_subscription(window.app_handle().clone(), channel).await
+    centrifugo
+        .add_subscription(window.app_handle().clone(), channel)
+        .await
 }
 
 /// Remove a channel subscription
@@ -417,10 +397,9 @@ pub async fn add_subscription<R: Runtime>(
 ///
 /// - `centrifugo:unsubscribed` - Unsubscription successful
 #[tauri::command]
-pub async fn remove_subscription<R: Runtime>(
-    window: Window<R>,
-    channel: String,
-) -> Result<()> {
+pub async fn remove_subscription<R: Runtime>(window: Window<R>, channel: String) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
-    centrifugo.remove_subscription(window.app_handle().clone(), channel).await
+    centrifugo
+        .remove_subscription(window.app_handle().clone(), channel)
+        .await
 }
