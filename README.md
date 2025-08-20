@@ -48,11 +48,11 @@ cargo tauri add centrifugo
 
 #### Backend (Rust)
 
-Add the plugin to your `Cargo.toml`:
+Add the plugin using cargo:
 
-```toml
-[dependencies]
-tauri-plugin-centrifugo = "0.1.0"
+```bash
+cd ./src-tauri
+cargo add tauri-plugin-centrifugo
 ```
 
 #### Frontend (JavaScript/TypeScript)
@@ -609,7 +609,6 @@ See the [Capabilities Overview](https://v2.tauri.app/security/capabilities/) for
   ]
 }
 ```
-
 
 ## License
 
