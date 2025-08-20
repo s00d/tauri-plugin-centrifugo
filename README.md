@@ -20,7 +20,33 @@ A Tauri plugin for real-time communication with Centrifugo server using the `tok
 
 ## Installation
 
-### Backend (Rust)
+### Automatic Installation (Recommended)
+
+Use the Tauri CLI to automatically install both the Rust and JavaScript parts of the plugin:
+
+```bash
+# npm
+npm run tauri add centrifugo
+
+# yarn  
+yarn run tauri add centrifugo
+
+# pnpm
+pnpm tauri add centrifugo
+
+# deno
+deno task tauri add centrifugo
+
+# bun
+bun tauri add centrifugo
+
+# cargo
+cargo tauri add centrifugo
+```
+
+### Manual Installation
+
+#### Backend (Rust)
 
 Add the plugin to your `Cargo.toml`:
 
@@ -29,7 +55,7 @@ Add the plugin to your `Cargo.toml`:
 tauri-plugin-centrifugo = "0.1.0"
 ```
 
-### Frontend (JavaScript/TypeScript)
+#### Frontend (JavaScript/TypeScript)
 
 Install the JavaScript API:
 
@@ -38,6 +64,16 @@ npm install tauri-plugin-centrifugo-api
 # or
 pnpm add tauri-plugin-centrifugo-api
 ```
+
+## Platform Compatibility
+
+| Platform | Supported |
+| -------- | --------- |
+| Linux    | ✓         |
+| Windows  | ✓         |
+| macOS    | ✓         |
+| Android  | ✓         |
+| iOS      | ✓         |
 
 ## Usage
 
@@ -557,6 +593,23 @@ pnpm tauri dev
 - **Rust**: tauri 2.6.2+, tokio-centrifugo, serde, thiserror
 - **JavaScript**: @tauri-apps/api >=2.0.0-beta.6
 - **Build Tools**: rollup, typescript
+
+
+## Permissions
+
+By default all potentially dangerous plugin commands and scopes are blocked and cannot be accessed. You must modify the permissions in your `capabilities` configuration to enable these.
+
+See the [Capabilities Overview](https://v2.tauri.app/security/capabilities/) for more information and the [step by step guide](https://v2.tauri.app/learn/security/using-plugin-permissions/) to use plugin permissions.
+
+```json title="src-tauri/capabilities/default.json" ins={4}
+{
+  "permissions": [
+    "...",
+    "centrifugo:default"
+  ]
+}
+```
+
 
 ## License
 
