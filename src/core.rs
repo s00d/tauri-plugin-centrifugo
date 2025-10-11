@@ -175,7 +175,7 @@ impl Centrifugo {
 
         // Setup callbacks for connection
         let app_clone = app.clone();
-        cf_client.on_connecting(move || {
+        cf_client.on_connecting(move |_e| {
             println!("DEBUG: on_connecting callback called");
             let _ = app_clone.emit(
                 "centrifugo:connecting",
@@ -184,7 +184,7 @@ impl Centrifugo {
         });
 
         let app_clone = app.clone();
-        cf_client.on_connected(move || {
+        cf_client.on_connected(move |_e| {
             println!("DEBUG: on_connected callback called");
             let _ = app_clone.emit(
                 "centrifugo:connected",
@@ -193,7 +193,7 @@ impl Centrifugo {
         });
 
         let app_clone = app.clone();
-        cf_client.on_disconnected(move || {
+        cf_client.on_disconnected(move |_e| {
             println!("DEBUG: on_disconnected callback called");
             let _ = app_clone.emit(
                 "centrifugo:disconnected",
@@ -229,7 +229,7 @@ impl Centrifugo {
 
             let app_clone = app.clone();
             let channel_name = channel.clone();
-            subscription.on_subscribed(move || {
+            subscription.on_subscribed(move |_e| {
                 let _ = app_clone.emit(
                     "centrifugo:subscribed",
                     serde_json::json!({"channel": channel_name}),
@@ -238,7 +238,7 @@ impl Centrifugo {
 
             let app_clone = app.clone();
             let channel_name = channel.clone();
-            subscription.on_unsubscribed(move || {
+            subscription.on_unsubscribed(move |_e| {
                 let _ = app_clone.emit(
                     "centrifugo:unsubscribed",
                     serde_json::json!({"channel": channel_name}),
@@ -247,7 +247,7 @@ impl Centrifugo {
 
             let app_clone = app.clone();
             let channel_name = channel.clone();
-            subscription.on_subscribing(move || {
+            subscription.on_subscribing(move |_e| {
                 let _ = app_clone.emit(
                     "centrifugo:subscribing",
                     serde_json::json!({"channel": channel_name}),
@@ -518,7 +518,7 @@ impl Centrifugo {
             // Setup event handlers for new subscription
             let app_clone = app.clone();
             let channel_name = channel.clone();
-            subscription.on_subscribed(move || {
+            subscription.on_subscribed(move |_e| {
                 let _ = app_clone.emit(
                     "centrifugo:subscribed",
                     serde_json::json!({"channel": channel_name}),
@@ -527,7 +527,7 @@ impl Centrifugo {
 
             let app_clone = app.clone();
             let channel_name = channel.clone();
-            subscription.on_unsubscribed(move || {
+            subscription.on_unsubscribed(move |_e| {
                 let _ = app_clone.emit(
                     "centrifugo:unsubscribed",
                     serde_json::json!({"channel": channel_name}),
@@ -536,7 +536,7 @@ impl Centrifugo {
 
             let app_clone = app.clone();
             let channel_name = channel.clone();
-            subscription.on_subscribing(move || {
+            subscription.on_subscribing(move |_e| {
                 let _ = app_clone.emit(
                     "centrifugo:subscribing",
                     serde_json::json!({"channel": channel_name}),
@@ -596,7 +596,7 @@ impl Centrifugo {
             // Setup event handlers for unsubscribing
             let app_clone = app.clone();
             let channel_name = channel.clone();
-            subscription.on_unsubscribed(move || {
+            subscription.on_unsubscribed(move |_e| {
                 let _ = app_clone.emit(
                     "centrifugo:unsubscribed",
                     serde_json::json!({"channel": channel_name}),
