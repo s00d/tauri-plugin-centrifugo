@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-09
+
 ### Fixed
 - `centrifugo:default` now includes `allow-provide-token`, `allow-add-subscription-with-options` and
   `allow-remove-all-subscriptions`; with only the default set, `provideToken` (the token bridge),

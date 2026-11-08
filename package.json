@@ -1,6 +1,6 @@
 {
   "name": "tauri-plugin-centrifugo-api",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "s00d",
   "description": "Tauri plugin API for Centrifugo real-time communication, built on the official centrifuge-client Rust SDK",
   "repository": {
