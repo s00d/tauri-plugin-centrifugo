@@ -8,7 +8,7 @@ rust-version = "1.85.0"
 repository = "https://github.com/s00d/tauri-plugin-centrifugo"
 license = "MIT"
 keywords = ["tauri", "plugin", "centrifugo", "websocket", "real-time"]
-include = ["/src/**/*", "/permissions/**/*", "/tests/real_centrifugo.rs", "/build.rs", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE"]
+include = ["/src/**/*", "/permissions/**/*", "/tests/real_centrifugo.rs", "/build.rs", "/windows-test-manifest.xml", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE"]
 links = "tauri-plugin-centrifugo"
 
 [dependencies]

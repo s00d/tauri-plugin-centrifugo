@@ -169,17 +169,20 @@ impl Events {
     }
 
     async fn wait(&mut self, name: &str) -> Value {
+        let mut seen = Vec::new();
         let deadline = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let (n, v) = self.0.recv().await.expect("events channel closed");
                 if n == name {
                     return v;
                 }
+                seen.push(format!("{n}: {v}"));
             }
         });
-        deadline
-            .await
-            .unwrap_or_else(|_| panic!("no centrifugo:{name} event"))
+        match deadline.await {
+            Ok(v) => v,
+            Err(_) => panic!("no centrifugo:{name} event; got instead: {seen:#?}"),
+        }
     }
 }
 
