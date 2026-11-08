@@ -523,30 +523,6 @@
           "markdownDescription": "Denies the set_token command without any pre-configured scope."
         },
         {
-          "description": "Enables the start_connection command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-start-connection",
-          "markdownDescription": "Enables the start_connection command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the start_connection command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-start-connection",
-          "markdownDescription": "Denies the start_connection command without any pre-configured scope."
-        },
-        {
-          "description": "Enables the stop_connection command without any pre-configured scope.",
-          "type": "string",
-          "const": "allow-stop-connection",
-          "markdownDescription": "Enables the stop_connection command without any pre-configured scope."
-        },
-        {
-          "description": "Denies the stop_connection command without any pre-configured scope.",
-          "type": "string",
-          "const": "deny-stop-connection",
-          "markdownDescription": "Denies the stop_connection command without any pre-configured scope."
-        },
-        {
           "description": "Enables the sub_refresh command without any pre-configured scope.",
           "type": "string",
           "const": "allow-sub-refresh",
@@ -559,10 +535,10 @@
           "markdownDescription": "Denies the sub_refresh command without any pre-configured scope."
         },
         {
-          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-connect`\n- `allow-disconnect`\n- `allow-set-token`\n- `allow-publish`\n- `allow-rpc`\n- `allow-presence`\n- `allow-presence-stats`\n- `allow-history`\n- `allow-send`\n- `allow-refresh`\n- `allow-sub-refresh`\n- `allow-ping`\n- `allow-is-connected`\n- `allow-get-subscriptions`\n- `allow-get-connection-state`\n- `allow-add-subscription`\n- `allow-remove-subscription`",
+          "description": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-connect`\n- `allow-disconnect`\n- `allow-set-token`\n- `allow-provide-token`\n- `allow-publish`\n- `allow-rpc`\n- `allow-presence`\n- `allow-presence-stats`\n- `allow-history`\n- `allow-send`\n- `allow-refresh`\n- `allow-sub-refresh`\n- `allow-ping`\n- `allow-is-connected`\n- `allow-get-subscriptions`\n- `allow-get-connection-state`\n- `allow-add-subscription`\n- `allow-add-subscription-with-options`\n- `allow-remove-subscription`\n- `allow-remove-all-subscriptions`",
           "type": "string",
           "const": "default",
-          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-connect`\n- `allow-disconnect`\n- `allow-set-token`\n- `allow-publish`\n- `allow-rpc`\n- `allow-presence`\n- `allow-presence-stats`\n- `allow-history`\n- `allow-send`\n- `allow-refresh`\n- `allow-sub-refresh`\n- `allow-ping`\n- `allow-is-connected`\n- `allow-get-subscriptions`\n- `allow-get-connection-state`\n- `allow-add-subscription`\n- `allow-remove-subscription`"
+          "markdownDescription": "Default permissions for the plugin\n#### This default permission set includes:\n\n- `allow-connect`\n- `allow-disconnect`\n- `allow-set-token`\n- `allow-provide-token`\n- `allow-publish`\n- `allow-rpc`\n- `allow-presence`\n- `allow-presence-stats`\n- `allow-history`\n- `allow-send`\n- `allow-refresh`\n- `allow-sub-refresh`\n- `allow-ping`\n- `allow-is-connected`\n- `allow-get-subscriptions`\n- `allow-get-connection-state`\n- `allow-add-subscription`\n- `allow-add-subscription-with-options`\n- `allow-remove-subscription`\n- `allow-remove-all-subscriptions`"
         }
       ]
     }

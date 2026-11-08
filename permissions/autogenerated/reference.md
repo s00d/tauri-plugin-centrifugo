@@ -7,6 +7,7 @@ Default permissions for the plugin
 - `allow-connect`
 - `allow-disconnect`
 - `allow-set-token`
+- `allow-provide-token`
 - `allow-publish`
 - `allow-rpc`
 - `allow-presence`
@@ -20,7 +21,9 @@ Default permissions for the plugin
 - `allow-get-subscriptions`
 - `allow-get-connection-state`
 - `allow-add-subscription`
+- `allow-add-subscription-with-options`
 - `allow-remove-subscription`
+- `allow-remove-all-subscriptions`
 
 ## Permission Table
 
@@ -521,58 +524,6 @@ Enables the set_token command without any pre-configured scope.
 <td>
 
 Denies the set_token command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`centrifugo:allow-start-connection`
-
-</td>
-<td>
-
-Enables the start_connection command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`centrifugo:deny-start-connection`
-
-</td>
-<td>
-
-Denies the start_connection command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`centrifugo:allow-stop-connection`
-
-</td>
-<td>
-
-Enables the stop_connection command without any pre-configured scope.
-
-</td>
-</tr>
-
-<tr>
-<td>
-
-`centrifugo:deny-stop-connection`
-
-</td>
-<td>
-
-Denies the stop_connection command without any pre-configured scope.
 
 </td>
 </tr>

@@ -4,6 +4,7 @@ permissions = [
   "allow-connect",
   "allow-disconnect",
   "allow-set-token",
+  "allow-provide-token",
   "allow-publish",
   "allow-rpc",
   "allow-presence",
@@ -17,5 +18,7 @@ permissions = [
   "allow-get-subscriptions",
   "allow-get-connection-state",
   "allow-add-subscription",
-  "allow-remove-subscription"
+  "allow-add-subscription-with-options",
+  "allow-remove-subscription",
+  "allow-remove-all-subscriptions"
 ]
