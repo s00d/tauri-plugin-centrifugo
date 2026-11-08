@@ -21,9 +21,9 @@
 //! All commands return `Result<T>` which automatically serializes errors
 //! to the frontend with meaningful error messages.
 
+use crate::Result;
 use crate::core::Centrifugo;
 use crate::models::*;
-use crate::Result;
 use std::collections::HashMap;
 use tauri::{Manager, Runtime, Window};
 
@@ -100,6 +100,12 @@ pub async fn set_token<R: Runtime>(window: Window<R>, token: String) -> Result<(
     centrifugo.set_token(token).await
 }
 
+#[tauri::command]
+pub async fn provide_token<R: Runtime>(window: Window<R>, token: String) -> Result<()> {
+    let centrifugo = window.state::<Centrifugo>();
+    centrifugo.provide_token(token).await
+}
+
 /// Publish a message to a specific channel
 ///
 /// The message data should be base64-encoded. The message will be
@@ -152,8 +158,6 @@ pub async fn rpc<R: Runtime>(window: Window<R>, request: RpcRequest) -> Result<S
 /// Get presence information for a channel
 ///
 /// Returns a list of client identifiers currently subscribed to the channel.
-/// **Note**: This method is marked as `NotImplemented` as it's not directly
-/// supported by tokio-centrifuge.
 ///
 /// # Parameters
 ///
@@ -163,7 +167,7 @@ pub async fn rpc<R: Runtime>(window: Window<R>, request: RpcRequest) -> Result<S
 /// # Returns
 ///
 /// - `Ok(Vec<String>)` containing client identifiers
-/// - `Err(Error::NotImplemented)` - Feature not supported
+/// - `Err(Error)` if the request fails
 #[tauri::command]
 pub async fn presence<R: Runtime>(
     window: Window<R>,
@@ -176,7 +180,7 @@ pub async fn presence<R: Runtime>(
 /// Get presence statistics for a channel
 ///
 /// Returns aggregated statistics about the number of clients and users
-/// in a channel. **Note**: This method is marked as `NotImplemented`.
+/// in a channel.
 ///
 /// # Parameters
 ///
@@ -186,7 +190,7 @@ pub async fn presence<R: Runtime>(
 /// # Returns
 ///
 /// - `Ok((u32, u32))` containing (num_clients, num_users)
-/// - `Err(Error::NotImplemented)` - Feature not supported
+/// - `Err(Error)` if the request fails
 #[tauri::command]
 pub async fn presence_stats<R: Runtime>(
     window: Window<R>,
@@ -199,7 +203,6 @@ pub async fn presence_stats<R: Runtime>(
 /// Get message history for a channel
 ///
 /// Retrieves historical messages from a channel with optional filtering.
-/// **Note**: This method is marked as `NotImplemented`.
 ///
 /// # Parameters
 ///
@@ -209,7 +212,7 @@ pub async fn presence_stats<R: Runtime>(
 /// # Returns
 ///
 /// - `Ok(Vec<PublicationData>)` containing historical publications
-/// - `Err(Error::NotImplemented)` - Feature not supported
+/// - `Err(Error)` if the request fails
 #[tauri::command]
 pub async fn history<R: Runtime>(
     window: Window<R>,
@@ -222,7 +225,6 @@ pub async fn history<R: Runtime>(
 /// Send a message directly to the server
 ///
 /// Sends a message to the server (not to specific channels).
-/// **Note**: This method is marked as `NotImplemented`.
 ///
 /// # Parameters
 ///
@@ -232,7 +234,7 @@ pub async fn history<R: Runtime>(
 /// # Returns
 ///
 /// - `Ok(())` on successful send
-/// - `Err(Error::NotImplemented)` - Feature not supported
+/// - `Err(Error)` if sending fails
 #[tauri::command]
 pub async fn send<R: Runtime>(window: Window<R>, request: SendRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
@@ -242,7 +244,6 @@ pub async fn send<R: Runtime>(window: Window<R>, request: SendRequest) -> Result
 /// Refresh the authentication token
 ///
 /// Updates the client's authentication token during an active session.
-/// **Note**: This method is marked as `NotImplemented`.
 ///
 /// # Parameters
 ///
@@ -252,7 +253,7 @@ pub async fn send<R: Runtime>(window: Window<R>, request: SendRequest) -> Result
 /// # Returns
 ///
 /// - `Ok(())` on successful token refresh
-/// - `Err(Error::NotImplemented)` - Feature not supported
+/// - `Err(Error)` if refresh fails
 #[tauri::command]
 pub async fn refresh<R: Runtime>(window: Window<R>, request: RefreshRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
@@ -262,7 +263,6 @@ pub async fn refresh<R: Runtime>(window: Window<R>, request: RefreshRequest) -> 
 /// Refresh a subscription token for a specific channel
 ///
 /// Updates the subscription token for a channel during an active session.
-/// **Note**: This method is marked as `NotImplemented`.
 ///
 /// # Parameters
 ///
@@ -272,7 +272,7 @@ pub async fn refresh<R: Runtime>(window: Window<R>, request: RefreshRequest) -> 
 /// # Returns
 ///
 /// - `Ok(())` on successful token refresh
-/// - `Err(Error::NotImplemented)` - Feature not supported
+/// - `Err(Error)` if refresh fails
 #[tauri::command]
 pub async fn sub_refresh<R: Runtime>(window: Window<R>, request: SubRefreshRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
@@ -282,7 +282,6 @@ pub async fn sub_refresh<R: Runtime>(window: Window<R>, request: SubRefreshReque
 /// Ping the Centrifugo server
 ///
 /// Sends a ping to check server availability and latency.
-/// **Note**: This method is marked as `NotImplemented`.
 ///
 /// # Parameters
 ///
@@ -291,7 +290,7 @@ pub async fn sub_refresh<R: Runtime>(window: Window<R>, request: SubRefreshReque
 /// # Returns
 ///
 /// - `Ok(())` on successful ping
-/// - `Err(Error::NotImplemented)` - Feature not supported
+/// - `Err(Error)` if ping fails
 #[tauri::command]
 pub async fn ping<R: Runtime>(window: Window<R>) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
@@ -379,6 +378,17 @@ pub async fn add_subscription<R: Runtime>(window: Window<R>, channel: String) ->
         .await
 }
 
+#[tauri::command]
+pub async fn add_subscription_with_options<R: Runtime>(
+    window: Window<R>,
+    options: SubscribeOptions,
+) -> Result<()> {
+    let centrifugo = window.state::<Centrifugo>();
+    centrifugo
+        .add_subscription_with_options(window.app_handle().clone(), options)
+        .await
+}
+
 /// Remove a channel subscription
 ///
 /// Unsubscribes from a channel and stops receiving messages from it.
@@ -401,5 +411,13 @@ pub async fn remove_subscription<R: Runtime>(window: Window<R>, channel: String)
     let centrifugo = window.state::<Centrifugo>();
     centrifugo
         .remove_subscription(window.app_handle().clone(), channel)
+        .await
+}
+
+#[tauri::command]
+pub async fn remove_all_subscriptions<R: Runtime>(window: Window<R>) -> Result<()> {
+    let centrifugo = window.state::<Centrifugo>();
+    centrifugo
+        .remove_all_subscriptions(window.app_handle().clone())
         .await
 }

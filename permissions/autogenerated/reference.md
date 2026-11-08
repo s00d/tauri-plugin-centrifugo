@@ -60,6 +60,32 @@ Denies the add_subscription command without any pre-configured scope.
 <tr>
 <td>
 
+`centrifugo:allow-add-subscription-with-options`
+
+</td>
+<td>
+
+Enables the add_subscription_with_options command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`centrifugo:deny-add-subscription-with-options`
+
+</td>
+<td>
+
+Denies the add_subscription_with_options command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `centrifugo:allow-connect`
 
 </td>
@@ -294,6 +320,32 @@ Denies the presence_stats command without any pre-configured scope.
 <tr>
 <td>
 
+`centrifugo:allow-provide-token`
+
+</td>
+<td>
+
+Enables the provide_token command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`centrifugo:deny-provide-token`
+
+</td>
+<td>
+
+Denies the provide_token command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
 `centrifugo:allow-publish`
 
 </td>
@@ -339,6 +391,32 @@ Enables the refresh command without any pre-configured scope.
 <td>
 
 Denies the refresh command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`centrifugo:allow-remove-all-subscriptions`
+
+</td>
+<td>
+
+Enables the remove_all_subscriptions command without any pre-configured scope.
+
+</td>
+</tr>
+
+<tr>
+<td>
+
+`centrifugo:deny-remove-all-subscriptions`
+
+</td>
+<td>
+
+Denies the remove_all_subscriptions command without any pre-configured scope.
 
 </td>
 </tr>

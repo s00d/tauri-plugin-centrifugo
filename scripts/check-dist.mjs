@@ -1,0 +1,14 @@
+// Smoke check of the built package: both entry points load and export the same API.
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const cjs = require('../dist-js/index.cjs')
+const esm = await import('../dist-js/index.js')
+
+const names = (m) => Object.keys(m).filter((k) => k !== 'default').sort()
+const [a, b] = [names(cjs), names(esm)]
+if (a.join() !== b.join()) throw new Error(`CJS/ESM exports differ:\n${a}\n${b}`)
+for (const fn of ['connect', 'publish', 'onPublication', 'onNeedSubToken', 'addSubscriptionWithOptions']) {
+  if (typeof esm[fn] !== 'function') throw new Error(`missing export: ${fn}`)
+}
+console.log(`dist ok: ${a.length} exports`)

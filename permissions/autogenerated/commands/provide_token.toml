@@ -1,0 +1,13 @@
+# Automatically generated - DO NOT EDIT!
+
+"$schema" = "../../schemas/schema.json"
+
+[[permission]]
+identifier = "allow-provide-token"
+description = "Enables the provide_token command without any pre-configured scope."
+commands.allow = ["provide_token"]
+
+[[permission]]
+identifier = "deny-provide-token"
+description = "Denies the provide_token command without any pre-configured scope."
+commands.deny = ["provide_token"]

@@ -307,6 +307,18 @@
           "markdownDescription": "Denies the add_subscription command without any pre-configured scope."
         },
         {
+          "description": "Enables the add_subscription_with_options command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-add-subscription-with-options",
+          "markdownDescription": "Enables the add_subscription_with_options command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the add_subscription_with_options command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-add-subscription-with-options",
+          "markdownDescription": "Denies the add_subscription_with_options command without any pre-configured scope."
+        },
+        {
           "description": "Enables the connect command without any pre-configured scope.",
           "type": "string",
           "const": "allow-connect",
@@ -415,6 +427,18 @@
           "markdownDescription": "Denies the presence_stats command without any pre-configured scope."
         },
         {
+          "description": "Enables the provide_token command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-provide-token",
+          "markdownDescription": "Enables the provide_token command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the provide_token command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-provide-token",
+          "markdownDescription": "Denies the provide_token command without any pre-configured scope."
+        },
+        {
           "description": "Enables the publish command without any pre-configured scope.",
           "type": "string",
           "const": "allow-publish",
@@ -437,6 +461,18 @@
           "type": "string",
           "const": "deny-refresh",
           "markdownDescription": "Denies the refresh command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the remove_all_subscriptions command without any pre-configured scope.",
+          "type": "string",
+          "const": "allow-remove-all-subscriptions",
+          "markdownDescription": "Enables the remove_all_subscriptions command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the remove_all_subscriptions command without any pre-configured scope.",
+          "type": "string",
+          "const": "deny-remove-all-subscriptions",
+          "markdownDescription": "Denies the remove_all_subscriptions command without any pre-configured scope."
         },
         {
           "description": "Enables the remove_subscription command without any pre-configured scope.",

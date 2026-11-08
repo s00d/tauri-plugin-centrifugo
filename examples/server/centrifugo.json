@@ -1,4 +1,5 @@
 {
+  "log_level": "debug",
   "port": 8001,
   "admin": true,
   "admin_insecure": true,

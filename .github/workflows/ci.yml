@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Not the latest on purpose: the oldest major the plugin supports.
+  CENTRIFUGO_VERSION: 5.4.9
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            centrifugo: linux_amd64.tar.gz
+          - os: macos-latest
+            centrifugo: darwin_arm64.tar.gz
+          - os: windows-latest
+            centrifugo: windows_amd64.zip
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux system deps (webkit for tauri)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Centrifugo
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/centrifugo"
+          cd "$RUNNER_TEMP/centrifugo"
+          file="centrifugo_${CENTRIFUGO_VERSION}_${{ matrix.centrifugo }}"
+          curl -sSfL -o "$file" "https://github.com/centrifugal/centrifugo/releases/download/v${CENTRIFUGO_VERSION}/${file}"
+          if [[ "$file" == *.zip ]]; then unzip -q "$file"; else tar xzf "$file"; fi
+          echo "$RUNNER_TEMP/centrifugo" >> "$GITHUB_PATH"
+
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Rust tests (unit + real Centrifugo)
+        run: cargo test
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - name: Build guest-js and check dist (publint, attw, smoke)
+        run: pnpm build
+      - name: guest-js tests
+        run: pnpm test
+
+  mobile-build:
+    name: build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [aarch64-linux-android, x86_64-linux-android]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27c
+      - name: Build for Android (checks the webpki-roots TLS path)
+        shell: bash
+        env:
+          NDK: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          tb="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          triple="${{ matrix.target }}"
+          up=$(echo "$triple" | tr 'a-z-' 'A-Z_')
+          export CC_${triple//-/_}="$tb/${triple}24-clang"
+          export AR_${triple//-/_}="$tb/llvm-ar"
+          export CARGO_TARGET_${up}_LINKER="$tb/${triple}24-clang"
+          cargo build --target "$triple"

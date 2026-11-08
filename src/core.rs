@@ -1,499 +1,291 @@
 //! # Core Centrifugo Client
 //!
-//! This module contains the core logic for managing Centrifugo connections,
-//! subscriptions, and real-time communication. It serves as the central
-//! state manager for the plugin.
-//!
-//! ## Architecture
-//!
-//! The `Centrifugo` struct manages:
-//! - WebSocket connection to Centrifugo server
-//! - Channel subscriptions and their states
-//! - Event emission to the frontend
-//! - Connection lifecycle management
-//!
-//! ## State Management
-//!
-//! The client uses `Arc<Mutex<Option<Client>>>` to provide thread-safe
-//! access to the tokio-centrifuge client across multiple async operations.
-//!
-//! ## Event System
-//!
-//! All connection state changes and channel events are emitted to the
-//! frontend through Tauri's event system using the `centrifugo:` prefix.
-//!
-//! ## Error Handling
-//!
-//! Methods return `Result<T>` with custom error types that provide
-//! meaningful error messages for debugging and user feedback.
+//! State manager for the plugin, built on the official
+//! [`centrifuge-client`](https://github.com/centrifugal/centrifuge-rust) SDK.
+//! All connection and channel events are forwarded to the frontend as Tauri
+//! events with the `centrifugo:` prefix.
 
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::*;
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use serde_json;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use centrifuge::{
+    Client, ClientEvent, ClientInfo, DeltaType, HistoryOptions, Protocol, Publication, State,
+    StreamPosition, SubState, Subscription, SubscriptionEvent, TokenError, TransportEndpoint,
+};
+use futures_util::StreamExt;
+use serde_json::{Value, json};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Runtime};
-use tokio::runtime::Runtime as TokioRuntime;
-use tokio::task::JoinHandle;
+use tokio::sync::{RwLock, oneshot};
 
-/// Main Centrifugo client for managing connections and subscriptions
-///
-/// This struct encapsulates all the functionality needed to interact with
-/// a Centrifugo server, including connection management, channel subscriptions,
-/// and real-time message handling.
-///
-/// # Thread Safety
-///
-/// The client uses `Arc<Mutex<Option<Client>>>` to ensure thread-safe access
-/// across multiple async operations. The `Mutex` is acquired only when needed
-/// and released immediately after use.
-///
-/// # State Management
-///
-/// The client maintains internal state for:
-/// - Connection status and configuration
-/// - Active channel subscriptions
-/// - Background task management
-/// - Event emission handles
-///
-/// # Example
-///
-/// ```rust
-/// use tauri_plugin_centrifugo::core::Centrifugo;
-///
-/// let centrifugo = Centrifugo::new();
-/// // The client is ready to be managed by Tauri
-/// ```
+type Waiters = Arc<RwLock<HashMap<String, oneshot::Sender<String>>>>;
+
+/// Key of the connection token waiter in [`Centrifugo::token_waiters`].
+const CONNECTION: &str = "";
+
+fn decode_payload(data: &str, encoding: Option<DataEncoding>) -> Result<Vec<u8>> {
+    match encoding.unwrap_or(DataEncoding::Base64) {
+        DataEncoding::Base64 => Ok(BASE64.decode(data)?),
+        DataEncoding::RawJson => {
+            let _: Value = serde_json::from_str(data)?;
+            Ok(data.as_bytes().to_vec())
+        }
+    }
+}
+
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+fn info_json(info: &ClientInfo) -> ClientInfoData {
+    ClientInfoData {
+        client: info.client.clone(),
+        user: info.user.clone(),
+        conn_info: BASE64.encode(info.conn_info.as_deref().unwrap_or_default()),
+        chan_info: BASE64.encode(info.chan_info.as_deref().unwrap_or_default()),
+    }
+}
+
+fn publication_data(channel: &str, p: &Publication) -> PublicationData {
+    PublicationData {
+        channel: p.channel.clone().unwrap_or_else(|| channel.to_string()),
+        data: BASE64.encode(&p.data),
+        data_encoding: Some(DataEncoding::Base64),
+        raw_json: serde_json::from_slice::<Value>(&p.data).ok(),
+        offset: Some(p.offset),
+        info: p.info.as_ref().map(info_json),
+        tags: Some(p.tags.clone()),
+        timestamp: p.time.unwrap_or_else(now),
+    }
+}
+
+/// Asks the frontend for a token (`centrifugo:<event>`) and waits for
+/// `provide_token` / `sub_refresh` to answer under `key`. No timeout, as in
+/// centrifuge-js: the SDK ignores the result if `disconnect()` ends the
+/// attempt. An empty answer means "no token" (anonymous on connect,
+/// unauthorized on refresh / for a subscription).
+async fn request_token<R: Runtime>(
+    app: AppHandle<R>,
+    waiters: Waiters,
+    key: String,
+    event: &'static str,
+) -> std::result::Result<String, TokenError> {
+    let (tx, rx) = oneshot::channel();
+    waiters.write().await.insert(key.clone(), tx);
+    let payload = if key.is_empty() {
+        json!({ "ts": now() })
+    } else {
+        json!({ "channel": key, "ts": now() })
+    };
+    let _ = app.emit(event, payload);
+    // The sender is dropped when a newer request replaces this one or on
+    // disconnect: retry (with backoff), never treat it as "unauthorized".
+    rx.await
+        .map_err(|_| TokenError::Other("token request superseded".into()))
+}
+
+/// TLS for Android without the platform verifier's JNI setup: Mozilla's
+/// roots. ponytail: user-installed CAs are not trusted; pass the SDK's
+/// `android::init_with_env` path if an app needs them.
+#[cfg(target_os = "android")]
+fn android_tls() -> centrifuge::TlsConfig {
+    let roots = rustls::RootCertStore {
+        roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
+    };
+    let cfg = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    centrifuge::TlsConfig::rustls_client_config(cfg)
+}
+
+/// Main Centrifugo state managed by Tauri.
 pub struct Centrifugo {
-    runtime: Arc<TokioRuntime>,
-    client_task: Arc<Mutex<Option<JoinHandle<()>>>>,
-    client: Arc<Mutex<Option<tokio_centrifuge::client::Client>>>,
-    subscriptions: Arc<Mutex<HashMap<String, bool>>>,
+    client: Arc<RwLock<Option<Client>>>,
+    token_waiters: Waiters,
 }
 
 impl Centrifugo {
-    /// Create a new Centrifugo client instance
-    ///
-    /// This method initializes a new client with:
-    /// - A dedicated Tokio runtime for async operations
-    /// - Thread-safe state containers for client and subscriptions
-    /// - Background task management
-    ///
-    /// # Returns
-    ///
-    /// A new `Centrifugo` instance ready for connection management.
-    ///
-    /// # Panics
-    ///
-    /// This method will panic if it cannot create a Tokio runtime.
-    /// This should only happen in environments where Tokio is not supported.
     pub fn new() -> Self {
-        let runtime = Arc::new(TokioRuntime::new().expect("Failed to create Tokio runtime"));
         Self {
-            runtime,
-            client_task: Arc::new(Mutex::new(None)),
-            client: Arc::new(Mutex::new(None)),
-            subscriptions: Arc::new(Mutex::new(HashMap::new())),
+            client: Arc::new(RwLock::new(None)),
+            token_waiters: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Establish a connection to Centrifugo server
-    ///
-    /// This method initializes the WebSocket connection and subscribes to
-    /// the specified channels. The connection state is managed internally
-    /// and events are emitted to the frontend.
-    ///
-    /// # Parameters
-    ///
-    /// - `app`: Tauri app handle for event emission
-    /// - `config`: Connection configuration including URL, channels, and options
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())` on successful connection initiation
-    /// - `Err(Error)` if connection setup fails
-    ///
-    /// # Events Emitted
-    ///
-    /// - `centrifugo:connecting` - Connection attempt started
-    /// - `centrifugo:connected` - Connection established
-    /// - `centrifugo:subscribed` - Channel subscriptions successful
-    /// - `centrifugo:error` - Connection or subscription errors
-    ///
-    /// # Background Tasks
-    ///
-    /// This method spawns a background task to manage the connection lifecycle.
-    /// The task handles WebSocket communication, event processing, and state updates.
+    async fn client(&self) -> Result<Client> {
+        self.client.read().await.clone().ok_or(Error::NotConnected)
+    }
+
+    /// Creates the client, subscribes to `config.channels` and starts
+    /// connecting. Returns at once; progress arrives as events.
     pub async fn connect<R: Runtime>(&self, app: AppHandle<R>, config: StartConfig) -> Result<()> {
-        // Stop previous connection if exists
-        if let Ok(mut guard) = self.client_task.lock() {
-            if let Some(handle) = guard.take() {
-                handle.abort();
-            }
+        let old = self.client.write().await.take();
+        if let Some(old) = old {
+            old.close().await;
         }
 
-        let runtime = self.runtime.clone();
-        let client_task = self.client_task.clone();
-        let client = self.client.clone();
-        let subscriptions = self.subscriptions.clone();
-
-        let handle = runtime.spawn(async move {
-            Self::run_client(app, config, client, subscriptions).await;
-        });
-
-        if let Ok(mut guard) = client_task.lock() {
-            *guard = Some(handle);
+        let mut endpoints = vec![TransportEndpoint::websocket(config.url)];
+        if let Some(url) = config.http_stream_url {
+            endpoints.push(TransportEndpoint::http_stream(url));
         }
-
-        Ok(())
-    }
-
-    async fn run_client<R: Runtime>(
-        app: AppHandle<R>,
-        config: StartConfig,
-        client: Arc<Mutex<Option<tokio_centrifuge::client::Client>>>,
-        subscriptions: Arc<Mutex<HashMap<String, bool>>>,
-    ) {
-        use tokio_centrifuge::client::Client;
-        use tokio_centrifuge::config::Config as Cf;
-
-        let url = if config.use_protobuf {
-            format!("{}?format=protobuf", config.url)
-        } else {
-            config.url.clone()
-        };
-
-        let cf_config = if config.use_protobuf {
-            Cf::new().use_protobuf()
-        } else {
-            Cf::new()
-        };
-
-        let cf_client = Client::new(&url, cf_config);
-
-        // Setup callbacks for connection
-        let app_clone = app.clone();
-        cf_client.on_connecting(move |_e| {
-            println!("DEBUG: on_connecting callback called");
-            let _ = app_clone.emit(
-                "centrifugo:connecting",
-                serde_json::json!({"ts": chrono::Utc::now().timestamp_millis()}),
-            );
-        });
-
-        let app_clone = app.clone();
-        cf_client.on_connected(move |_e| {
-            println!("DEBUG: on_connected callback called");
-            let _ = app_clone.emit(
-                "centrifugo:connected",
-                serde_json::json!({"ts": chrono::Utc::now().timestamp_millis()}),
-            );
-        });
-
-        let app_clone = app.clone();
-        cf_client.on_disconnected(move |_e| {
-            println!("DEBUG: on_disconnected callback called");
-            let _ = app_clone.emit(
-                "centrifugo:disconnected",
-                serde_json::json!({"ts": chrono::Utc::now().timestamp_millis()}),
-            );
-        });
-
-        let app_clone = app.clone();
-        cf_client.on_error(move |err| {
-            println!("DEBUG: on_error callback called with error: {:?}", err);
-            let _ = app_clone.emit(
-                "centrifugo:error",
-                serde_json::json!({"error": format!("{:?}", err)}),
-            );
-        });
-
-        // Save client
-        if let Ok(mut guard) = client.lock() {
-            *guard = Some(cf_client.clone());
-        }
-
-        // Connect to server
-        let _ = cf_client.connect().await;
-
-        // Subscribe to channels
-        for channel in &config.channels {
-            let _ = app.emit(
-                "centrifugo:subscribing",
-                serde_json::json!({"channel": channel}),
-            );
-
-            let subscription = cf_client.new_subscription(channel);
-
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_subscribed(move |_e| {
-                let _ = app_clone.emit(
-                    "centrifugo:subscribed",
-                    serde_json::json!({"channel": channel_name}),
-                );
+        let mut builder = Client::builder_with_transports(endpoints)
+            .runtime(tauri::async_runtime::handle().inner().clone())
+            .protocol(if config.use_protobuf {
+                Protocol::Protobuf
+            } else {
+                Protocol::Json
             });
-
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_unsubscribed(move |_e| {
-                let _ = app_clone.emit(
-                    "centrifugo:unsubscribed",
-                    serde_json::json!({"channel": channel_name}),
-                );
-            });
-
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_subscribing(move |_e| {
-                let _ = app_clone.emit(
-                    "centrifugo:subscribing",
-                    serde_json::json!({"channel": channel_name}),
-                );
-            });
-
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_publication(move |data| {
-                let _ = app_clone.emit(
-                    "centrifugo:publication",
-                    serde_json::json!({
-                        "channel": channel_name,
-                        "data": BASE64.encode(&data.data)
-                    }),
-                );
-            });
-
-            // Update subscription status
-            if let Ok(mut guard) = subscriptions.lock() {
-                guard.insert(channel.clone(), true);
-            }
-
-            let _ = subscription.subscribe().await;
-        }
-    }
-
-    /// Close the connection to Centrifugo server
-    ///
-    /// This method gracefully closes the WebSocket connection and cleans up
-    /// all subscriptions and event listeners. It also aborts any running
-    /// background tasks related to the connection.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())` on successful disconnection
-    /// - `Err(Error)` if disconnection fails
-    ///
-    /// # Cleanup Operations
-    ///
-    /// - Aborts background connection tasks
-    /// - Disconnects the tokio-centrifuge client
-    /// - Clears all channel subscriptions
-    /// - Resets internal client state
-    ///
-    /// # Events Emitted
-    ///
-    /// - `centrifugo:disconnected` - Connection closed
-    pub async fn disconnect(&self) -> Result<()> {
-        if let Ok(mut guard) = self.client_task.lock() {
-            if let Some(handle) = guard.take() {
-                handle.abort();
-            }
-        }
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Some(client.clone())
-            } else {
-                None
-            }
-        };
-        if let Some(client) = client {
-            let _ = client.disconnect().await;
-        }
-        if let Ok(mut guard) = self.client.lock() {
-            *guard = None;
-        }
-        if let Ok(mut guard) = self.subscriptions.lock() {
-            guard.clear();
-        }
-        Ok(())
-    }
-
-    /// Set or update the authentication token
-    ///
-    /// This method allows updating the JWT token during an active session
-    /// without reconnecting to the server. The token is used for subsequent
-    /// operations that require authentication.
-    ///
-    /// # Parameters
-    ///
-    /// - `token`: New JWT authentication token
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())` on successful token update
-    /// - `Err(Error::NotConnected)` if no active connection exists
-    ///
-    /// # Requirements
-    ///
-    /// - Must have an active connection to Centrifugo server
-    /// - Token should be a valid JWT string
-    ///
-    /// # Usage
-    ///
-    /// This is useful for token refresh scenarios where you want to
-    /// update authentication without disrupting the current connection.
-    pub async fn set_token(&self, token: String) -> Result<()> {
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Some(client.clone())
-            } else {
-                None
-            }
-        };
-
-        if let Some(client) = client {
-            client.set_token(token);
-            Ok(())
-        } else {
-            Err(crate::error::Error::NotConnected)
-        }
-    }
-
-    /// Publish a message to a specific channel
-    ///
-    /// This method sends a message to all clients subscribed to the specified
-    /// channel. The message data should be base64-encoded and will be
-    /// decoded before sending to the server.
-    ///
-    /// # Parameters
-    ///
-    /// - `request`: Publish request containing channel name and base64-encoded data
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(())` on successful publication
-    /// - `Err(Error::NotConnected)` if not connected to server
-    /// - `Err(Error::Base64Error)` if data decoding fails
-    /// - `Err(Error::RequestError)` if server request fails
-    ///
-    /// # Requirements
-    ///
-    /// - Must be connected to Centrifugo server
-    /// - Channel must be subscribed to
-    /// - Data must be valid base64-encoded content
-    ///
-    /// # Data Processing
-    ///
-    /// The method automatically decodes base64 data before sending to the server,
-    /// ensuring proper binary data transmission.
-    pub async fn publish(&self, request: PublishRequest) -> Result<()> {
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Some(client.clone())
-            } else {
-                None
-            }
-        };
-
-        if let Some(client) = client {
-            // Check connection status
-            if client.state() != tokio_centrifuge::client::State::Connected {
-                return Err(crate::error::Error::NotConnected);
-            }
-
-            let data = BASE64.decode(&request.data)?;
-            client.publish(&request.channel, data).await?;
-            Ok(())
-        } else {
-            Err(crate::error::Error::NotConnected)
-        }
-    }
-
-    /// Check if currently connected to Centrifugo server
-    ///
-    /// This method returns the current connection status by checking
-    /// the tokio-centrifuge client state. It does not establish a
-    /// connection, only reports the current status.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(true)` if connected and ready for operations
-    /// - `Ok(false)` if disconnected or no client exists
-    /// - `Err(Error)` if status check fails
-    ///
-    /// # State Check
-    ///
-    /// The method checks if the client exists and if its state
-    /// is `tokio_centrifuge::client::State::Connected`.
-    ///
-    /// # Usage
-    ///
-    /// Use this method before attempting operations that require
-    /// an active connection, such as publishing messages or RPC calls.
-    pub async fn is_connected(&self) -> Result<bool> {
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Ok(client.state() == tokio_centrifuge::client::State::Connected)
-            } else {
-                Ok(false)
-            }
-        };
-
-        client
-    }
-
-    pub async fn get_subscriptions(&self) -> Result<HashMap<String, bool>> {
-        // Get current state from local cache
-        let guard = self.subscriptions.lock().unwrap_or_else(|e| e.into_inner());
-        let mut subscriptions = guard.clone();
-
-        // Check client state for synchronization
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Some(client.clone())
-            } else {
-                None
-            }
-        };
-
-        // If client is not connected, clear all subscriptions
-        if client.is_none()
-            || client.as_ref().unwrap().state() != tokio_centrifuge::client::State::Connected
+        #[cfg(target_os = "android")]
         {
-            subscriptions.clear();
-
-            // Update local cache
-            if let Ok(mut guard) = self.subscriptions.lock() {
-                *guard = subscriptions.clone();
-            }
+            builder = builder.tls(android_tls());
         }
+        // The SDK calls `get_token` when the token is empty, and before it
+        // expires. Install it only when the app uses tokens, so anonymous
+        // connections never wait for the frontend.
+        let request_token_cb = config.token.is_some() || config.request_token.unwrap_or(false);
+        if let Some(token) = config.token {
+            builder = builder.token(token);
+        }
+        if let Some(name) = config.name {
+            builder = builder.name(name);
+        }
+        if let Some(version) = config.version {
+            builder = builder.version(version);
+        }
+        if let Some(headers) = config.headers {
+            let mut map = http::HeaderMap::new();
+            for (k, v) in headers {
+                let name = http::HeaderName::try_from(k.as_str())
+                    .map_err(|e| Error::RequestError(format!("header {k}: {e}")))?;
+                let value = http::HeaderValue::try_from(v.as_str())
+                    .map_err(|e| Error::RequestError(format!("header {k}: {e}")))?;
+                map.insert(name, value);
+            }
+            builder = builder.http_headers(map);
+        }
+        if let Some(ms) = config.read_timeout {
+            builder = builder.timeout(Duration::from_millis(ms));
+        }
+        if request_token_cb {
+            let (token_app, waiters) = (app.clone(), self.token_waiters.clone());
+            builder = builder.get_token(move |_| {
+                let fut = request_token(
+                    token_app.clone(),
+                    waiters.clone(),
+                    CONNECTION.into(),
+                    "centrifugo:need_token",
+                );
+                async move { fut.await.map(Some) }
+            });
+        }
+        let client = builder.build()?;
 
-        Ok(subscriptions)
+        forward_client_events(app.clone(), &client);
+        for channel in config.channels {
+            let _ = self.subscribe(&app, &client, SubscribeOptions::channel(channel))?;
+        }
+        client.connect()?;
+        *self.client.write().await = Some(client);
+        Ok(())
+    }
+
+    fn subscribe<R: Runtime>(
+        &self,
+        app: &AppHandle<R>,
+        client: &Client,
+        opts: SubscribeOptions,
+    ) -> Result<Subscription> {
+        let mut builder = client
+            .new_subscription(opts.channel.clone())
+            .recoverable(opts.recoverable.unwrap_or(false))
+            .join_leave(opts.join_leave.unwrap_or(false))
+            .positioned(opts.positioned.unwrap_or(false));
+        if opts.delta.unwrap_or(false) {
+            builder = builder.delta(DeltaType::Fossil);
+        }
+        if let Some(pos) = opts.since {
+            builder = builder.since(StreamPosition::new(pos.offset, pos.epoch));
+        }
+        if let Some(token) = opts.token {
+            // Private channel: when the token expires, ask the frontend for a
+            // new one (`centrifugo:need_sub_token`, answered by `sub_refresh`).
+            let (token_app, waiters) = (app.clone(), self.token_waiters.clone());
+            builder = builder.token(token).get_token(move |ctx| {
+                request_token(
+                    token_app.clone(),
+                    waiters.clone(),
+                    ctx.channel,
+                    "centrifugo:need_sub_token",
+                )
+            });
+        }
+        let sub = builder.build()?;
+        forward_subscription_events(app.clone(), &sub);
+        sub.subscribe();
+        Ok(sub)
+    }
+
+    pub async fn disconnect(&self) -> Result<()> {
+        let client = self.client.write().await.take();
+        if let Some(client) = client {
+            client.close().await;
+        }
+        self.token_waiters.write().await.clear();
+        Ok(())
+    }
+
+    /// Replaces the connection token used from the next connect attempt.
+    pub async fn set_token(&self, token: String) -> Result<()> {
+        self.client().await?.set_token(token);
+        Ok(())
+    }
+
+    pub async fn publish(&self, request: PublishRequest) -> Result<()> {
+        if request.r#type.unwrap_or(0) != 0
+            || request.key.as_deref().is_some_and(|k| !k.is_empty())
+            || request.removed.unwrap_or(false)
+        {
+            return Err(Error::Unsupported("map publish (type/key/removed)"));
+        }
+        let data = decode_payload(&request.data, request.data_encoding)?;
+        Ok(self.client().await?.publish(&request.channel, data).await?)
+    }
+
+    pub async fn is_connected(&self) -> Result<bool> {
+        Ok(self
+            .client
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|c| c.state() == State::Connected))
+    }
+
+    /// Channels added through this plugin; `true` when currently subscribed.
+    pub async fn get_subscriptions(&self) -> Result<HashMap<String, bool>> {
+        Ok(match self.client.read().await.as_ref() {
+            Some(c) => c
+                .subscriptions()
+                .into_iter()
+                .map(|(ch, s)| (ch, s.state() == SubState::Subscribed))
+                .collect(),
+            None => HashMap::new(),
+        })
     }
 
     pub async fn get_connection_state(&self) -> Result<String> {
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                match client.state() {
-                    tokio_centrifuge::client::State::Disconnected => Ok("disconnected".to_string()),
-                    tokio_centrifuge::client::State::Connecting => Ok("connecting".to_string()),
-                    tokio_centrifuge::client::State::Connected => Ok("connected".to_string()),
-                }
-            } else {
-                Ok("disconnected".to_string())
-            }
-        };
-
-        client
+        let state = self.client.read().await.as_ref().map(Client::state);
+        Ok(match state {
+            Some(State::Connecting) => "connecting",
+            Some(State::Connected) => "connected",
+            Some(State::Closed) => "closed",
+            _ => "disconnected",
+        }
+        .to_string())
     }
 
     pub async fn add_subscription<R: Runtime>(
@@ -501,204 +293,292 @@ impl Centrifugo {
         app: AppHandle<R>,
         channel: String,
     ) -> Result<()> {
-        // Check if client is connected
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Some(client.clone())
-            } else {
-                return Err(crate::error::Error::NotConnected);
-            }
-        };
+        self.add_subscription_with_options(app, SubscribeOptions::channel(channel))
+            .await
+    }
 
-        if let Some(client) = client {
-            // Create new subscription with event handlers
-            let subscription = client.new_subscription(&channel);
-
-            // Setup event handlers for new subscription
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_subscribed(move |_e| {
-                let _ = app_clone.emit(
-                    "centrifugo:subscribed",
-                    serde_json::json!({"channel": channel_name}),
-                );
-            });
-
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_unsubscribed(move |_e| {
-                let _ = app_clone.emit(
-                    "centrifugo:unsubscribed",
-                    serde_json::json!({"channel": channel_name}),
-                );
-            });
-
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_subscribing(move |_e| {
-                let _ = app_clone.emit(
-                    "centrifugo:subscribing",
-                    serde_json::json!({"channel": channel_name}),
-                );
-            });
-
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_publication(move |data| {
-                let _ = app_clone.emit(
-                    "centrifugo:publication",
-                    serde_json::json!({
-                        "channel": channel_name,
-                        "data": BASE64.encode(&data.data)
-                    }),
-                );
-            });
-
-            // Subscribe to channel
-            if let Err(e) = subscription.subscribe().await {
-                return Err(crate::error::Error::RequestError(format!(
-                    "Failed to subscribe to {}: {:?}",
-                    channel, e
-                )));
-            }
-
-            // Update subscription status
-            if let Ok(mut guard) = self.subscriptions.lock() {
-                guard.insert(channel, true);
-            }
-
-            Ok(())
-        } else {
-            Err(crate::error::Error::NotConnected)
-        }
+    pub async fn add_subscription_with_options<R: Runtime>(
+        &self,
+        app: AppHandle<R>,
+        opts: SubscribeOptions,
+    ) -> Result<()> {
+        let client = self.client().await?;
+        self.subscribe(&app, &client, opts)?;
+        Ok(())
     }
 
     pub async fn remove_subscription<R: Runtime>(
         &self,
-        app: AppHandle<R>,
+        _app: AppHandle<R>,
         channel: String,
     ) -> Result<()> {
-        // Check if client is connected
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Some(client.clone())
-            } else {
-                return Err(crate::error::Error::NotConnected);
-            }
-        };
-
-        if let Some(client) = client {
-            // Create subscription for unsubscribing
-            let subscription = client.new_subscription(&channel);
-
-            // Setup event handlers for unsubscribing
-            let app_clone = app.clone();
-            let channel_name = channel.clone();
-            subscription.on_unsubscribed(move |_e| {
-                let _ = app_clone.emit(
-                    "centrifugo:unsubscribed",
-                    serde_json::json!({"channel": channel_name}),
-                );
-            });
-
-            // Unsubscribe from channel
-            subscription.unsubscribe().await;
-
-            // Update subscription status
-            if let Ok(mut guard) = self.subscriptions.lock() {
-                guard.remove(&channel);
-            }
-
-            Ok(())
-        } else {
-            Err(crate::error::Error::NotConnected)
+        let client = self.client().await?;
+        if let Some(sub) = client.get_subscription(&channel) {
+            sub.unsubscribe();
+            client.remove_subscription(&sub)?;
         }
+        self.token_waiters.write().await.remove(&channel);
+        Ok(())
+    }
+
+    pub async fn remove_all_subscriptions<R: Runtime>(&self, app: AppHandle<R>) -> Result<()> {
+        let channels: Vec<String> = self.client().await?.subscriptions().into_keys().collect();
+        for channel in channels {
+            self.remove_subscription(app.clone(), channel).await?;
+        }
+        Ok(())
     }
 
     pub async fn rpc(&self, request: RpcRequest) -> Result<String> {
-        let client = {
-            let client_guard = self.client.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(client) = &*client_guard {
-                Some(client.clone())
-            } else {
-                None
-            }
-        };
+        let data = decode_payload(&request.data, request.data_encoding)?;
+        let result = self.client().await?.rpc(&request.method, data).await?;
+        Ok(BASE64.encode(&result.data))
+    }
 
-        if let Some(client) = client {
-            // Check connection status
-            if client.state() != tokio_centrifuge::client::State::Connected {
-                return Err(crate::error::Error::NotConnected);
-            }
+    pub async fn presence(&self, request: PresenceRequest) -> Result<Vec<String>> {
+        let result = self.client().await?.presence(&request.channel).await?;
+        Ok(result.clients.into_keys().collect())
+    }
 
-            let data = BASE64.decode(&request.data)?;
-            let response = client.rpc(&request.method, data).await?;
-            Ok(BASE64.encode(&response))
+    pub async fn presence_stats(&self, request: PresenceStatsRequest) -> Result<(u32, u32)> {
+        let result = self
+            .client()
+            .await?
+            .presence_stats(&request.channel)
+            .await?;
+        Ok((result.num_clients, result.num_users))
+    }
+
+    pub async fn history(&self, request: HistoryRequest) -> Result<Vec<PublicationData>> {
+        let mut opts = HistoryOptions::new().reverse(request.reverse.unwrap_or(false));
+        if let Some(limit) = request.limit {
+            opts = opts.limit(limit);
+        }
+        let result = self.client().await?.history(&request.channel, opts).await?;
+        Ok(result
+            .publications
+            .iter()
+            .map(|p| publication_data(&request.channel, p))
+            .collect())
+    }
+
+    pub async fn send(&self, request: SendRequest) -> Result<()> {
+        let data = decode_payload(&request.data, request.data_encoding)?;
+        Ok(self.client().await?.send(data).await?)
+    }
+
+    /// Answers a pending `need_token` request, or sets the token for the next
+    /// connect. The SDK refreshes connection tokens itself via `need_token`.
+    pub async fn refresh(&self, request: RefreshRequest) -> Result<()> {
+        let client = self.client().await?;
+        if let Some(waiter) = self.token_waiters.write().await.remove(CONNECTION) {
+            let _ = waiter.send(request.token);
         } else {
-            Err(crate::error::Error::NotConnected)
+            client.set_token(request.token);
+        }
+        Ok(())
+    }
+
+    /// Answers a pending `need_sub_token` request for the channel.
+    pub async fn sub_refresh(&self, request: SubRefreshRequest) -> Result<()> {
+        self.client().await?;
+        if request.r#type.unwrap_or(0) != 0
+            || request.items.is_some()
+            || request.untrack_keys.is_some()
+        {
+            return Err(Error::Unsupported("track/untrack sub refresh"));
+        }
+        let waiter = self.token_waiters.write().await.remove(&request.channel);
+        let waiter = waiter.ok_or_else(|| {
+            Error::RequestError(format!(
+                "No token request in progress for {}",
+                request.channel
+            ))
+        })?;
+        let _ = waiter.send(request.token);
+        Ok(())
+    }
+
+    /// The SDK keeps the connection alive with server pings; this only checks
+    /// that the client is connected.
+    pub async fn ping(&self) -> Result<()> {
+        if self.is_connected().await? {
+            Ok(())
+        } else {
+            Err(Error::NotConnected)
         }
     }
 
-    pub async fn presence(&self, _request: PresenceRequest) -> Result<Vec<String>> {
-        Err(crate::error::Error::NotImplemented(
-            "Presence not supported in tokio-centrifuge".to_string(),
-        ))
-    }
-
-    pub async fn presence_stats(&self, _request: PresenceStatsRequest) -> Result<(u32, u32)> {
-        Err(crate::error::Error::NotImplemented(
-            "Presence stats not supported in tokio-centrifuge".to_string(),
-        ))
-    }
-
-    pub async fn history(&self, _request: HistoryRequest) -> Result<Vec<PublicationData>> {
-        Err(crate::error::Error::NotImplemented(
-            "History not supported in tokio-centrifuge".to_string(),
-        ))
-    }
-
-    pub async fn send(&self, _request: SendRequest) -> Result<()> {
-        Err(crate::error::Error::NotImplemented(
-            "Send not supported in tokio-centrifuge".to_string(),
-        ))
-    }
-
-    pub async fn refresh(&self, _request: RefreshRequest) -> Result<()> {
-        Err(crate::error::Error::NotImplemented(
-            "Refresh not supported in tokio-centrifuge".to_string(),
-        ))
-    }
-
-    pub async fn sub_refresh(&self, _request: SubRefreshRequest) -> Result<()> {
-        Err(crate::error::Error::NotImplemented(
-            "Sub refresh not supported in tokio-centrifuge".to_string(),
-        ))
-    }
-
-    pub async fn ping(&self) -> Result<()> {
-        Err(crate::error::Error::NotImplemented(
-            "Ping not supported in tokio-centrifuge".to_string(),
-        ))
+    pub async fn provide_token(&self, token: String) -> Result<()> {
+        let waiter = self.token_waiters.write().await.remove(CONNECTION);
+        let waiter =
+            waiter.ok_or_else(|| Error::RequestError("No token request in progress".into()))?;
+        let _ = waiter.send(token);
+        Ok(())
     }
 }
 
-/// Default implementation for Centrifugo client
-///
-/// This implementation provides a convenient way to create a new
-/// Centrifugo client instance with default values.
-///
-/// # Example
-///
-/// ```rust
-/// use tauri_plugin_centrifugo::core::Centrifugo;
-///
-/// let centrifugo = Centrifugo::default();
-/// // Equivalent to Centrifugo::new()
-/// ```
 impl Default for Centrifugo {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+fn forward_client_events<R: Runtime>(app: AppHandle<R>, client: &Client) {
+    let mut events = client.events();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.next().await {
+            let (name, payload) = match event {
+                ClientEvent::Connecting(e) => (
+                    "connecting",
+                    json!({"ts": now(), "code": e.code, "reason": e.reason}),
+                ),
+                ClientEvent::Connected(e) => {
+                    ("connected", json!({"ts": now(), "client": e.client_id}))
+                }
+                ClientEvent::Disconnected(e) => (
+                    "disconnected",
+                    json!({"ts": now(), "code": e.code, "reason": e.reason}),
+                ),
+                ClientEvent::Error(e) => ("error", json!({"error": e.error.to_string()})),
+                ClientEvent::ServerSubscribed(e) => {
+                    ("server_subscribed", json!({"channel": e.channel}))
+                }
+                ClientEvent::ServerSubscribing(e) => {
+                    ("server_subscribing", json!({"channel": e.channel}))
+                }
+                ClientEvent::ServerUnsubscribed(e) => {
+                    ("server_unsubscribed", json!({"channel": e.channel}))
+                }
+                ClientEvent::ServerPublication(e) => (
+                    "server_publication",
+                    json!(publication_data(&e.channel, &e.publication)),
+                ),
+                ClientEvent::ServerJoin(e) => (
+                    "server_join",
+                    json!({"channel": e.channel, "client": e.info.client, "user": e.info.user}),
+                ),
+                ClientEvent::ServerLeave(e) => (
+                    "server_leave",
+                    json!({"channel": e.channel, "client": e.info.client, "user": e.info.user}),
+                ),
+                _ => continue,
+            };
+            let _ = app.emit(&format!("centrifugo:{name}"), payload);
+        }
+    });
+}
+
+fn forward_subscription_events<R: Runtime>(app: AppHandle<R>, sub: &Subscription) {
+    let channel = sub.channel().to_string();
+    let mut events = sub.events();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.next().await {
+            let (name, payload) = match event {
+                SubscriptionEvent::Subscribing(e) => (
+                    "subscribing",
+                    json!({"channel": channel, "code": e.code, "reason": e.reason}),
+                ),
+                SubscriptionEvent::Subscribed(e) => {
+                    let pos = e.stream_position.map(|p| StreamPositionData {
+                        offset: p.offset,
+                        epoch: p.epoch,
+                    });
+                    let payload = json!({
+                        "channel": channel,
+                        "wasRecovering": e.was_recovering,
+                        "recovered": e.recovered,
+                        "streamPosition": pos,
+                    });
+                    ("subscribed", payload)
+                }
+                SubscriptionEvent::Unsubscribed(e) => (
+                    "unsubscribed",
+                    json!({"channel": channel, "code": e.code, "reason": e.reason}),
+                ),
+                SubscriptionEvent::Publication(e) => (
+                    "publication",
+                    json!(publication_data(&channel, &e.publication)),
+                ),
+                SubscriptionEvent::Join(e) => (
+                    "join",
+                    json!({"channel": channel, "info": info_json(&e.info)}),
+                ),
+                SubscriptionEvent::Leave(e) => (
+                    "leave",
+                    json!({"channel": channel, "info": info_json(&e.info)}),
+                ),
+                SubscriptionEvent::Error(e) => (
+                    "error",
+                    json!({"channel": channel, "error": e.error.to_string()}),
+                ),
+                _ => continue,
+            };
+            let _ = app.emit(&format!("centrifugo:{name}"), payload);
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn operations_fail_without_client() {
+        let core = Centrifugo::new();
+        assert!(matches!(core.ping().await, Err(Error::NotConnected)));
+        assert!(matches!(
+            core.refresh(RefreshRequest { token: "t".into() }).await,
+            Err(Error::NotConnected)
+        ));
+        assert!(matches!(
+            core.rpc(RpcRequest {
+                method: "m".into(),
+                data: BASE64.encode(b"{}"),
+                data_encoding: None
+            })
+            .await,
+            Err(Error::NotConnected)
+        ));
+        assert!(matches!(
+            core.presence(PresenceRequest {
+                channel: "news".into()
+            })
+            .await,
+            Err(Error::NotConnected)
+        ));
+        assert!(!core.is_connected().await.unwrap());
+        assert_eq!(core.get_connection_state().await.unwrap(), "disconnected");
+        assert!(core.get_subscriptions().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn map_publish_is_rejected_before_network() {
+        let core = Centrifugo::new();
+        let req = PublishRequest {
+            channel: "news".into(),
+            data: BASE64.encode(b"{}"),
+            data_encoding: None,
+            r#type: Some(1),
+            key: Some("k".into()),
+            removed: None,
+        };
+        assert!(matches!(
+            core.publish(req).await,
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    #[test]
+    fn decode_payload_handles_both_encodings() {
+        assert_eq!(decode_payload(&BASE64.encode(b"hi"), None).unwrap(), b"hi");
+        assert_eq!(
+            decode_payload(r#"{"a":1}"#, Some(DataEncoding::RawJson)).unwrap(),
+            br#"{"a":1}"#
+        );
+        assert!(matches!(
+            decode_payload("{bad", Some(DataEncoding::RawJson)),
+            Err(Error::SerializationError(_))
+        ));
     }
 }

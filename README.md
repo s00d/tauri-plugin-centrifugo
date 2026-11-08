@@ -7,16 +7,20 @@
 
 # Tauri Plugin Centrifugo
 
-A Tauri plugin for real-time communication with Centrifugo server using the `tokio-centrifuge` library.
+A Tauri plugin for real-time communication with a Centrifugo server, built on the official Rust SDK
+[`centrifuge-client`](https://github.com/centrifugal/centrifuge-rust).
 
 ## Features
 
-- **Real-time Communication**: WebSocket-based communication with Centrifugo
+- **Real-time Communication**: WebSocket, with an optional HTTP-streaming fallback
+- **Real networks**: reconnects with backoff, ping/pong liveness, wake-from-sleep detection, OS proxy settings and trust store (from the SDK)
+- **Recovery**: recoverable/positioned subscriptions, resume from a saved stream position, fossil delta compression
 - **JSON & Protobuf Support**: Choose between JSON and Protobuf protocols
 - **Event-driven Architecture**: Comprehensive event system for connection state and messages
 - **Channel Management**: Subscribe/unsubscribe to channels dynamically
 - **Authentication**: JWT token support for secure connections
 - **Cross-platform**: Works on desktop and mobile platforms
+- **Backward-compatible payloads**: Base64 by default with optional raw JSON mode
 
 ## Installation
 
@@ -28,7 +32,7 @@ Use the Tauri CLI to automatically install both the Rust and JavaScript parts of
 # npm
 npm run tauri add centrifugo
 
-# yarn  
+# yarn
 yarn run tauri add centrifugo
 
 # pnpm
@@ -72,8 +76,11 @@ pnpm add tauri-plugin-centrifugo-api
 | Linux    | ✓         |
 | Windows  | ✓         |
 | macOS    | ✓         |
-| Android  | ✓         |
+| Android  | ✓ (TLS with Mozilla roots via `webpki-roots`; user-installed CAs are not trusted) |
 | iOS      | ✓         |
+
+Server: Centrifugo v4+ (client protocol v2); HTTP-streaming needs v5+ with `http_stream` enabled.
+Tested against Centrifugo v5.4.9.
 
 ## Usage
 
@@ -84,7 +91,7 @@ Initialize the plugin in your Tauri app:
 ```rust
 fn main() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_centrifugo::init;())
+        .plugin(tauri_plugin_centrifugo::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -104,7 +111,11 @@ await connect({
   name: 'client-name',
   channels: ['channel1', 'channel2'],
   useProtobuf: false,
-  readTimeout: 5000
+  readTimeout: 5000,
+  // optional:
+  httpStreamUrl: 'http://localhost:8000/connection/http_stream', // fallback transport
+  headers: { 'X-App': 'demo' },                                  // HTTP headers
+  requestToken: false // true: ask the frontend for a token (need_token) instead of `token`
 })
 
 // Check connection status
@@ -117,43 +128,55 @@ await disconnect()
 #### Publishing Messages
 
 ```typescript
-import { helpers } from 'tauri-plugin-centrifugo-api'
+import { publish, helpers } from 'tauri-plugin-centrifugo-api'
 
-// Publish JSON message
+// Publish JSON message (base64 transport)
 await helpers.publishJson('channel-name', {
   message: 'Hello World',
   timestamp: Date.now()
 })
 
-// Publish raw data (base64 encoded)
-await publish('channel-name', 'base64-encoded-data')
+// Publish JSON in raw mode (optional)
+await helpers.publishRawJson('channel-name', {
+  message: 'Hello raw JSON'
+})
+
+// Publish raw data (base64)
+await publish({ channel: 'channel-name', data: 'base64-encoded-data' })
 ```
 
 #### RPC Calls
 
 ```typescript
-import { helpers } from 'tauri-plugin-centrifugo-api'
+import { rpc, helpers } from 'tauri-plugin-centrifugo-api'
 
-// Execute RPC with JSON data
-const result = await helpers.rpcJson('method-name', {
+// Execute RPC with JSON data (base64) and typed response
+const result = await helpers.rpcJson<
+  { userId: number; action: string },
+  { ok: boolean; profile?: { id: number } }
+>('method-name', {
   userId: 123,
   action: 'getInfo'
 })
 
-// Execute RPC with raw data
-const result = await rpc('method-name', 'base64-encoded-data')
+// Execute RPC with raw data (base64)
+const rawResult = await rpc({ method: 'method-name', data: 'base64-encoded-data' })
 ```
 
 #### Event Listeners
 
 ```typescript
-import { 
-  onConnecting, 
-  onConnected, 
-  onDisconnected, 
+import {
+  onConnecting,
+  onConnected,
+  onDisconnected,
   onPublication,
   onSubscribed,
-  onUnsubscribed 
+  onUnsubscribed,
+  onNeedToken,
+  onNeedSubToken,
+  provideToken,
+  subRefresh
 } from 'tauri-plugin-centrifugo-api'
 
 // Listen to connection events
@@ -171,8 +194,21 @@ const unlistenDisconnected = await onDisconnected((eventData) => {
 
 // Listen to publications
 const unlistenPublication = await onPublication((eventData) => {
-  const { channel, data } = eventData.payload
-  console.log(`Message on ${channel}:`, data)
+  const { channel, data, rawJson } = eventData.payload
+  console.log(`Message on ${channel}:`, rawJson ?? data)
+})
+
+// Token bridge. Sent when `requestToken: true` and no token is set, and
+// before a `token` expires. provideToken('') means "no token".
+const unlistenNeedToken = await onNeedToken(async () => {
+  const freshToken = await fetch('/api/token').then(r => r.text())
+  await provideToken(freshToken)
+})
+
+// Subscription tokens (subscriptions created with `token`): answered with subRefresh
+const unlistenNeedSubToken = await onNeedSubToken(async ({ payload }) => {
+  const token = await fetch(`/api/sub-token?channel=${payload.channel}`).then(r => r.text())
+  await subRefresh({ channel: payload.channel, token })
 })
 
 // Listen to subscription events
@@ -189,6 +225,8 @@ unlistenConnecting()
 unlistenConnected()
 unlistenDisconnected()
 unlistenPublication()
+unlistenNeedToken()
+unlistenNeedSubToken()
 unlistenSubscribed()
 unlistenUnsubscribed()
 ```
@@ -196,17 +234,32 @@ unlistenUnsubscribed()
 #### Channel Management
 
 ```typescript
-import { 
-  addSubscription, 
-  removeSubscription, 
-  getSubscriptions 
+import {
+  addSubscription,
+  addSubscriptionWithOptions,
+  removeSubscription,
+  removeAllSubscriptions,
+  getSubscriptions
 } from 'tauri-plugin-centrifugo-api'
 
 // Add new subscription
 await addSubscription('new-channel')
 
-// Remove subscription
+// Add subscription with options
+await addSubscriptionWithOptions({
+  channel: 'recoverable-channel',
+  recoverable: true,
+  joinLeave: true,
+  // token: 'sub-jwt',          // private channel; refreshed via need_sub_token
+  // delta: true,               // fossil delta compression
+  // since: { offset, epoch },  // resume from `subscribed` event's streamPosition
+})
+
+// Remove one subscription
 await removeSubscription('channel-name')
+
+// Remove all subscriptions
+await removeAllSubscriptions()
 
 // Get all subscriptions
 const subscriptions = await getSubscriptions()
@@ -230,44 +283,6 @@ const jsonEncoded = utils.encodeJson({ message: 'Hello' })
 const jsonDecoded = utils.decodeJson(jsonEncoded)
 ```
 
-### Backend Commands
-
-You can also call Centrifugo commands directly from your Rust backend:
-
-```rust
-use tauri_plugin_centrifugo::{models::StartConfig, commands::connect};
-
-#[tauri::command]
-async fn start_backend_sockets(window: tauri::Window) -> Result<String, String> {
-    let config = StartConfig {
-        url: "ws://localhost:8000/connection/websocket".to_string(),
-        token: None,
-        name: Some("backend-client".to_string()),
-        version: Some("1.0.0".to_string()),
-        channels: vec!["backend".to_string()],
-        use_protobuf: false,
-        read_timeout: Some(5000),
-    };
-    
-    match connect(window, config).await {
-        Ok(_) => Ok("Backend sockets started successfully".to_string()),
-        Err(e) => Err(format!("Failed to start backend sockets: {}", e))
-    }
-}
-
-// Register the command
-.invoke_handler(tauri::generate_handler![start_backend_sockets])
-```
-
-Then call it from frontend:
-
-```typescript
-import { invoke } from '@tauri-apps/api/core'
-
-const result = await invoke<string>('start_backend_sockets')
-console.log(result) // "Backend sockets started successfully"
-```
-
 ## API Reference
 
 ### Core Functions
@@ -277,15 +292,31 @@ console.log(result) // "Backend sockets started successfully"
 | `connect` | Establish connection to Centrifugo | `StartConfig` | `Promise<void>` |
 | `disconnect` | Close connection | - | `Promise<void>` |
 | `setToken` | Set authentication token | `string` | `Promise<void>` |
-| `publish` | Publish message to channel | `channel: string, data: string` | `Promise<void>` |
-| `rpc` | Execute RPC call | `method: string, data: string` | `Promise<any>` |
+| `provideToken` | Answer a `need_token` request | `string` | `Promise<void>` |
+| `publish` | Publish message to channel | `PublishRequest` | `Promise<void>` |
+| `rpc` | Execute RPC call | `RpcRequest` | `Promise<string>` |
+| `presence` | Get presence information | `PresenceRequest` | `Promise<string[]>` |
+| `presenceStats` | Get presence statistics | `PresenceStatsRequest` | `Promise<[number, number]>` |
+| `history` | Get message history | `HistoryRequest` | `Promise<PublicationData[]>` |
+| `send` | Send message to server | `SendRequest` | `Promise<void>` |
+| `refresh` | Answer a pending `need_token`, else set the token for the next connect | `RefreshRequest` | `Promise<void>` |
+| `subRefresh` | Answer a `need_sub_token` request for the channel | `SubRefreshRequest` | `Promise<void>` |
+| `ping` | **Deprecated**: resolves when connected (the SDK pings by itself) | - | `Promise<void>` |
+
+The SDK refreshes connection and subscription tokens on its own, before they expire, by asking
+the frontend (`need_token` / `need_sub_token`). There is no manual refresh or ping command.
+Map publish (`type`/`key`/`removed`) and track/untrack sub refresh (`items`/`untrackKeys`/`type`)
+are not supported by the SDK and are rejected with `Not supported: ...`; `HistoryRequest.since`
+and `SubRefreshRequest.signature` are ignored.
 
 ### Helper Functions
 
 | Function | Description | Parameters | Returns |
 |----------|-------------|------------|---------|
-| `helpers.publishJson` | Publish JSON data | `channel: string, data: any` | `Promise<void>` |
-| `helpers.rpcJson` | Execute RPC with JSON | `method: string, data: any` | `Promise<any>` |
+| `helpers.publishJson` | Publish JSON data (base64) | `channel: string, data: T extends JsonValue` | `Promise<void>` |
+| `helpers.publishRawJson` | Publish JSON as raw payload | `channel: string, data: T extends JsonValue` | `Promise<void>` |
+| `helpers.rpcJson` | Execute RPC with JSON (base64) | `method: string, data: TReq extends JsonValue` | `Promise<TRes>` |
+| `helpers.rpcRawJson` | Execute RPC with raw JSON payload | `method: string, data: TReq extends JsonValue` | `Promise<string>` |
 | `helpers.subscribeToChannel` | Subscribe to channel with message listener | `channel: string, callback: Function` | `Promise<UnlistenFn>` |
 | `helpers.subscribeToChannels` | Subscribe to multiple channels | `channels: string[], callback: Function` | `Promise<UnlistenFn[]>` |
 | `helpers.waitForConnection` | Wait for connection with timeout | `timeout?: number` | `Promise<boolean>` |
@@ -299,98 +330,53 @@ console.log(result) // "Backend sockets started successfully"
 | `onConnected` | Connection established | `TauriEventWrapper<ConnectionStatus>` |
 | `onDisconnected` | Connection closed | `TauriEventWrapper<ConnectionStatus>` |
 | `onError` | Connection error | `TauriEventWrapper<ErrorData>` |
-| `onSubscribed` | Channel subscription successful | `TauriEventWrapper<ChannelStatus>` |
+| `onSubscribed` | Channel subscription successful | `TauriEventWrapper<SubscribedStatus>` (`wasRecovering`, `recovered`, `streamPosition`) |
 | `onUnsubscribed` | Channel unsubscription successful | `TauriEventWrapper<ChannelStatus>` |
 | `onSubscribing` | Channel subscription attempt | `TauriEventWrapper<ChannelStatus>` |
 | `onPublication` | Message received on channel | `TauriEventWrapper<PublicationData>` |
-| `onMessage` | Decoded message with channel info | `{ channel: string, data: any }` |
-| `onChannelMessage` | Decoded message for specific channel | `any` |
-| `onAnyMessage` | Decoded message with timestamp | `{ channel: string, data: any, timestamp: number }` |
+| `onServerPublication` | Server-side publication push | `TauriEventWrapper<PublicationData>` |
+| `onNeedToken` | Backend requests a connection token | `TauriEventWrapper<ConnectionStatus>` |
+| `onNeedSubToken` | Backend requests a subscription token | `TauriEventWrapper<ChannelStatus & { ts: number }>` |
+| `onPublicationRawJson` | JSON-only publication listener | `{ channel: string, data: unknown }` |
+| `onServerPublicationRawJson` | JSON-only server publication listener | `{ channel: string, data: unknown }` |
+| `onMessage` | Decoded message with channel info | `{ channel: string, data: T \| string }` |
+| `onChannelMessage` | Decoded message for specific channel | `T \| string` |
+| `onAnyMessage` | Decoded message with timestamp | `{ channel: string, data: T \| string, timestamp: number }` |
 
-### Utility Functions
-
-| Function | Description | Parameters | Returns |
-|----------|-------------|------------|---------|
-| `utils.encode` | Encode string to base64 | `string` | `string` |
-| `utils.decode` | Decode base64 to string | `string` | `string` |
-| `utils.encodeJson` | Encode object to base64 | `any` | `string` |
-| `utils.decodeJson` | Decode base64 to object | `string` | `any` |
-
-### Status Functions
-
-| Function | Description | Returns |
-|----------|-------------|---------|
-| `isConnected` | Check connection status | `Promise<boolean>` |
-| `getConnectionState` | Get detailed connection state | `Promise<string>` |
-| `getSubscriptions` | Get current subscriptions | `Promise<Record<string, boolean>>` |
-
-### Advanced Functions (NotImplemented)
-
-| Function | Description | Status |
-|----------|-------------|---------|
-| `presence` | Get presence information for channel | `NotImplemented` |
-| `presenceStats` | Get presence statistics for channel | `NotImplemented` |
-| `history` | Get message history for channel | `NotImplemented` |
-| `send` | Send message to server | `NotImplemented` |
-| `refresh` | Refresh authentication token | `NotImplemented` |
-| `subRefresh` | Refresh subscription token | `NotImplemented` |
-| `ping` | Ping server | `NotImplemented` |
-
-## Configuration
-
-### StartConfig
+### Configuration
 
 ```typescript
 interface StartConfig {
-  url: string                    // WebSocket URL
-  token?: string                 // JWT authentication token
-  name?: string                  // Client name
-  version?: string               // Client version
-  channels: string[]             // Channels to subscribe to
-  useProtobuf: boolean           // Use Protobuf protocol
-  readTimeout?: number           // Read timeout in milliseconds
+  url: string
+  token?: string
+  name?: string
+  version?: string
+  channels: string[]
+  useProtobuf: boolean
+  readTimeout?: number
+  httpStreamUrl?: string
+  headers?: Record<string, string>
+  requestToken?: boolean
 }
-```
 
-### Request Interfaces
-
-```typescript
 interface PublishRequest {
   channel: string
-  data: string                   // base64 encoded data
+  data: string
+  dataEncoding?: 'base64' | 'rawJson'
+  type?: number     // deprecated, must be 0
+  key?: string      // deprecated
+  removed?: boolean // deprecated
 }
 
 interface RpcRequest {
   method: string
-  data: string                   // base64 encoded data
-}
-
-interface PresenceRequest {
-  channel: string
-}
-
-interface PresenceStatsRequest {
-  channel: string
-}
-
-interface HistoryRequest {
-  channel: string
-  limit?: number
-  since?: string
-  reverse?: boolean
+  data: string
+  dataEncoding?: 'base64' | 'rawJson'
 }
 
 interface SendRequest {
-  data: string                   // base64 encoded data
-}
-
-interface RefreshRequest {
-  token: string
-}
-
-interface SubRefreshRequest {
-  channel: string
-  token: string
+  data: string
+  dataEncoding?: 'base64' | 'rawJson'
 }
 ```
 
@@ -399,158 +385,24 @@ interface SubRefreshRequest {
 ```typescript
 interface PublicationData {
   channel: string
-  data: string                   // base64 encoded data
-}
-
-interface ConnectionStatus {
-  ts: number
-}
-
-interface ChannelStatus {
-  channel: string
-}
-
-interface ErrorData {
-  error: string
-}
-
-interface RpcResponse {
-  method: string
-  data: string                   // base64 encoded data
-  timestamp: number
-}
-
-interface PresenceResponse {
-  channel: string
-  clients: string[]
-  timestamp: number
-}
-
-interface PresenceStatsResponse {
-  channel: string
-  numClients: number
-  numUsers: number
-  timestamp: number
-}
-
-interface HistoryResponse {
-  channel: string
-  publications: PublicationData[]
-  timestamp: number
-}
-
-interface PingResponse {
-  timestamp: number
-}
-```
-
-### Event Data Structure
-
-All events use the `TauriEventWrapper` structure:
-
-```typescript
-interface TauriEventWrapper<T> {
-  event: string
-  payload: T
-  id: number
-}
-```
-
-## Advanced Usage Examples
-
-### Message Handling with Decoded Data
-
-```typescript
-import { onMessage, onChannelMessage, onAnyMessage } from 'tauri-plugin-centrifugo-api'
-
-// Listen to all messages with automatic JSON decoding
-const unlistenMessages = await onMessage(({ channel, data }) => {
-  console.log(`Message on ${channel}:`, data)
-})
-
-// Listen to messages on specific channel
-const unlistenChannel = await onChannelMessage('chat', (data) => {
-  console.log('Chat message:', data)
-})
-
-// Listen to all messages with timestamp
-const unlistenAny = await onAnyMessage(({ channel, data, timestamp }) => {
-  console.log(`[${new Date(timestamp).toISOString()}] ${channel}:`, data)
-})
-```
-
-### Advanced Channel Management
-
-```typescript
-import { helpers } from 'tauri-plugin-centrifugo-api'
-
-// Subscribe to multiple channels with unified callback
-const unlisteners = await helpers.subscribeToChannels(['news', 'updates'], ({ channel, data }) => {
-  console.log(`${channel}:`, data)
-})
-
-// Wait for connection before proceeding
-const connected = await helpers.waitForConnection(15000)
-if (connected) {
-  console.log('Ready to publish messages')
-} else {
-  console.log('Connection timeout')
-}
-
-// Get connection status with retry
-const status = await helpers.getConnectionStatus(5)
-console.log('Connection status:', status)
-```
-
-### Error Handling and Retry Logic
-
-```typescript
-import { connect, isConnected, helpers } from 'tauri-plugin-centrifugo-api'
-
-async function connectWithRetry(maxRetries = 3) {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      console.log(`Connection attempt ${attempt}/${maxRetries}`)
-      
-      await connect({
-        url: 'ws://localhost:8000/connection/websocket',
-        channels: ['test'],
-        useProtobuf: false
-      })
-      
-      // Wait for connection to stabilize
-      const connected = await helpers.waitForConnection(5000)
-      if (connected) {
-        console.log('Successfully connected!')
-        return true
-      }
-      
-    } catch (error) {
-      console.error(`Attempt ${attempt} failed:`, error)
-      
-      if (attempt === maxRetries) {
-        throw new Error(`Failed to connect after ${maxRetries} attempts`)
-      }
-      
-      // Wait before retry
-      await new Promise(resolve => setTimeout(resolve, 1000 * attempt))
-    }
+  data: string
+  dataEncoding?: 'base64' | 'rawJson'
+  rawJson?: unknown
+  offset?: number
+  info?: {
+    client: string
+    user: string
+    connInfo: string
+    chanInfo: string
   }
-  
-  return false
+  tags?: Record<string, string>
 }
 ```
 
 ## Example Application
 
-The repository includes a complete Svelte example application demonstrating all plugin features:
-
-- Connection management
-- Message publishing
-- RPC calls
-- Event handling
-- Channel subscriptions
-- Backend command integration
+The repository includes a Vue example application demonstrating plugin features, and a
+Centrifugo config for it in `examples/server` (`centrifugo --config examples/server/centrifugo.json`).
 
 To run the example:
 
@@ -569,35 +421,33 @@ pnpm tauri dev
 cargo build
 
 # Build JavaScript API
-cd guest-js
 pnpm build
-
-# Build example app
-cd examples/tauri-app
-pnpm tauri build
 ```
 
 ### Testing
 
 ```bash
-# Test Rust code
+# Rust: unit tests + end-to-end tests against a real Centrifugo
+# (starts the `centrifugo` binary or $CENTRIFUGO_BIN; skipped if missing)
 cargo test
 
-# Test example app
-cd examples/tauri-app
-pnpm tauri dev
+# guest-js: unit tests, type check, build + dist checks (publint, attw, smoke)
+pnpm test
+pnpm typecheck
+pnpm build
 ```
+
+CI runs all of it on Linux, macOS and Windows against Centrifugo v5.4.9, and builds for Android.
 
 ## Dependencies
 
-- **Rust**: tauri 2.6.2+, tokio-centrifugo, serde, thiserror
+- **Rust**: tauri 2.6.2+, [`centrifuge-client`](https://crates.io/crates/centrifuge-client), serde, thiserror
 - **JavaScript**: @tauri-apps/api >=2.0.0-beta.6
-- **Build Tools**: rollup, typescript
-
+- **Build Tools**: vite, typescript, vitest, publint, @arethetypeswrong/cli
 
 ## Permissions
 
-By default all potentially dangerous plugin commands and scopes are blocked and cannot be accessed. You must modify the permissions in your `capabilities` configuration to enable these.
+By default all potentially dangerous plugin commands and scopes are blocked and cannot be accessed. You must modify permissions in your `capabilities` configuration to enable these.
 
 See the [Capabilities Overview](https://v2.tauri.app/security/capabilities/) for more information and the [step by step guide](https://v2.tauri.app/learn/security/using-plugin-permissions/) to use plugin permissions.
 
@@ -628,4 +478,3 @@ For issues and questions:
 - Create an issue on GitHub
 - Check the example application
 - Review the API documentation
-# tauri-plugin-centrifugo

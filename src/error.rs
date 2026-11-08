@@ -7,11 +7,10 @@
 //! ## Error Types
 //!
 //! - `NotConnected`: Attempted operation without active connection
-//! - `NotImplemented`: Feature not supported by tokio-centrifuge
 //! - `SerializationError`: Data serialization/deserialization failures
 //! - `CentrifugoError`: Errors from the Centrifugo server
 //! - `Base64Error`: Base64 encoding/decoding errors
-//! - `RequestError`: Errors from tokio-centrifuge client operations
+//! - `RequestError`: Errors from Centrifugo client operations
 
 use serde::Serialize;
 use thiserror::Error;
@@ -29,10 +28,6 @@ pub enum Error {
     #[error("Not connected to Centrifugo server")]
     NotConnected,
 
-    /// Feature is not implemented or supported by tokio-centrifuge
-    #[error("Feature not implemented: {0}")]
-    NotImplemented(String),
-
     /// Serialization or deserialization error
     #[error("Serialization error: {0}")]
     SerializationError(String),
@@ -45,9 +40,13 @@ pub enum Error {
     #[error("Base64 error: {0}")]
     Base64Error(String),
 
-    /// Error from tokio-centrifuge client operations
+    /// Error from Centrifugo client operations
     #[error("Request error: {0}")]
     RequestError(String),
+
+    /// Feature not supported by the centrifuge-client SDK
+    #[error("Not supported: {0}")]
+    Unsupported(&'static str),
 }
 
 impl From<serde_json::Error> for Error {
@@ -62,8 +61,14 @@ impl From<base64::DecodeError> for Error {
     }
 }
 
-impl From<tokio_centrifuge::client::RequestError> for Error {
-    fn from(err: tokio_centrifuge::client::RequestError) -> Self {
-        Error::RequestError(err.to_string())
+impl From<centrifuge::Error> for Error {
+    fn from(err: centrifuge::Error) -> Self {
+        match err {
+            centrifuge::Error::ClientDisconnected | centrifuge::Error::ClientClosed => {
+                Error::NotConnected
+            }
+            centrifuge::Error::Server(e) => Error::CentrifugoError(e.to_string()),
+            e => Error::RequestError(e.to_string()),
+        }
     }
 }

@@ -1,9 +1,12 @@
 {
   "name": "tauri-plugin-centrifugo-api",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "author": "s00d",
-  "description": "Tauri plugin for Centrifugo real-time communication using tokio-centrifuge",
-  "repository": "https://github.com/s00d/tauri-plugin-centrifugo",
+  "description": "Tauri plugin API for Centrifugo real-time communication, built on the official centrifuge-client Rust SDK",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/s00d/tauri-plugin-centrifugo.git"
+  },
   "license": "MIT",
   "keywords": [
     "tauri",
@@ -17,33 +20,47 @@
     "javascript"
   ],
   "type": "module",
+  "sideEffects": false,
   "types": "./dist-js/index.d.ts",
   "main": "./dist-js/index.cjs",
   "module": "./dist-js/index.js",
   "exports": {
-    "types": "./dist-js/index.d.ts",
-    "import": "./dist-js/index.js",
-    "require": "./dist-js/index.cjs"
+    ".": {
+      "import": {
+        "types": "./dist-js/index.d.ts",
+        "default": "./dist-js/index.js"
+      },
+      "require": {
+        "types": "./dist-js/index.d.cts",
+        "default": "./dist-js/index.cjs"
+      }
+    }
   },
   "files": [
     "dist-js",
     "README.md"
   ],
   "scripts": {
-    "build": "rollup -c",
+    "build": "vite build && tsc -p tsconfig.build.json && node -e \"require('fs').copyFileSync('dist-js/index.d.ts','dist-js/index.d.cts')\" && pnpm check:dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "prepublishOnly": "pnpm build",
-    "pretest": "pnpm build",
     "release": "pnpm build && cargo build",
-    "release:publish": "pnpm publish && cargo publish"
+    "release:publish": "pnpm publish && cargo publish",
+    "check:dist": "publint --strict && attw --pack . --profile node16 && node scripts/check-dist.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": ">=2.0.0-beta.6"
   },
   "devDependencies": {
-    "@rollup/plugin-typescript": "^12.0.0",
-    "rollup": "^4.9.6",
-    "typescript": "^5.3.3",
-    "tslib": "^2.6.2"
+    "@arethetypeswrong/cli": "^0.18.5",
+    "publint": "^0.3.25",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.6",
+    "vitest": "^5.1.0"
   },
-  "packageManager": "pnpm@9.15.9+sha512.68046141893c66fad01c079231128e9afb89ef87e2691d69e4d40eee228988295fd4682181bae55b58418c3a253bde65a505ec7c5f9403ece5cc3cd37dcf2531"
+  "packageManager": "pnpm@9.15.9+sha512.68046141893c66fad01c079231128e9afb89ef87e2691d69e4d40eee228988295fd4682181bae55b58418c3a253bde65a505ec7c5f9403ece5cc3cd37dcf2531",
+  "engines": {
+    "node": ">=20.19"
+  }
 }

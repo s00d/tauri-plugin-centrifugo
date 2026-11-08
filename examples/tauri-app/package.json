@@ -10,18 +10,16 @@
     "tauri": "tauri"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.5.0",
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/plugin-log": "^2.10.1",
     "tauri-plugin-centrifugo-api": "file:../../"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^5.0.0",
-    "svelte-preprocess": "^6.0.3",
-    "@tauri-apps/cli": "^2.0.0",
-    "@tsconfig/svelte": "^5.0.4",
-    "@types/node": "^20.17.6",
-    "svelte": "^5.25.6",
-    "tslib": "^2.8.1",
-    "typescript": "^5.6.3",
-    "vite": "^6.2.5"
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/node": "^24",
+    "@vitejs/plugin-vue": "^6.0.10",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.6",
+    "vue": "^3.5.45"
   }
 }

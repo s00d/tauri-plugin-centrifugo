@@ -1,3 +1,5 @@
+use tauri_plugin_log::{Target, TargetKind};
+
 // Learn more about Tauri commands at https://v2.tauri.app/develop/calling-rust/#commands
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -15,6 +17,9 @@ async fn start_sockets(window: tauri::Window) -> Result<String, String> {
         channels: vec!["backend".to_string()],
         use_protobuf: false,
         read_timeout: Some(5000),
+        http_stream_url: None,
+        headers: None,
+        request_token: None,
     };
     
     match tauri_plugin_centrifugo::commands::connect(window, config).await {
@@ -27,6 +32,18 @@ async fn start_sockets(window: tauri::Window) -> Result<String, String> {
 pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![greet, start_sockets])
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                // The default (Trace) forwards every dependency's trace log,
+                // JNI calls included, to the webview console.
+                .level(tauri_plugin_log::log::LevelFilter::Info)
+                .level_for("tauri_plugin_centrifugo", tauri_plugin_log::log::LevelFilter::Debug)
+                .level_for("centrifuge", tauri_plugin_log::log::LevelFilter::Debug)
+                .target(Target::new(TargetKind::Stdout))
+                .target(Target::new(TargetKind::Webview))
+                .target(Target::new(TargetKind::LogDir { file_name: Some("app".to_string()) }))
+                .build(),
+        )
         .plugin(tauri_plugin_centrifugo::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

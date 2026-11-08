@@ -1,26 +1,39 @@
 [package]
 name = "tauri-plugin-centrifugo"
-version = "0.1.2"
+version = "0.2.0"
 authors = [ "s00d" ]
-description = "Tauri plugin for Centrifugo real-time communication using tokio-centrifuge"
-edition = "2021"
-rust-version = "1.77.2"
+description = "Tauri plugin for Centrifugo real-time communication built on the official centrifuge-client SDK"
+edition = "2024"
+rust-version = "1.85.0"
 repository = "https://github.com/s00d/tauri-plugin-centrifugo"
 license = "MIT"
 keywords = ["tauri", "plugin", "centrifugo", "websocket", "real-time"]
-exclude = ["/examples", "/dist-js", "/node_modules"]
+include = ["/src/**/*", "/permissions/**/*", "/tests/real_centrifugo.rs", "/build.rs", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE"]
 links = "tauri-plugin-centrifugo"
 
 [dependencies]
 tauri = { version = "2.6.2" }
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-thiserror = "2"
-tokio-centrifuge = "0.2.6"
-tokio = { version = "1.0", features = ["full"] }
-base64 = "0.21"
-chrono = { version = "0.4", features = ["serde"] }
-futures-util = "0.3"
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+tokio = { version = "1.54", features = ["sync", "time"] }
+base64 = "0.23"
+futures-util = "0.3.34"
+centrifuge-client = "0.1.1"
+http = "1"
+
+# Android: the SDK's platform TLS verifier needs JNI + Gradle setup in the app.
+# Use Mozilla's roots (webpki-roots) instead, so `wss://` works with no setup.
+[target.'cfg(target_os = "android")'.dependencies]
+centrifuge-client = { version = "0.1.1", features = ["rustls-config"] }
+rustls = { version = "0.23.31", default-features = false, features = ["std", "tls12"] }
+webpki-roots = "1"
 
 [build-dependencies]
 tauri-plugin = { version = "2.3.0", features = ["build"] }
+
+[dev-dependencies]
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net"] }
+tauri = { version = "2.6.2", features = ["test"] }
+hmac = "0.13"
+sha2 = "0.11"

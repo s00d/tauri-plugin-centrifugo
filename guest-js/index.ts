@@ -3,6 +3,13 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 export type { UnlistenFn }
 
+export type JsonPrimitive = string | number | boolean | null
+export type JsonValue = JsonPrimitive | JsonObject | JsonArray
+export interface JsonObject {
+  [key: string]: JsonValue
+}
+export type JsonArray = JsonValue[]
+
 export interface StartConfig {
   url: string
   token?: string
@@ -11,16 +18,34 @@ export interface StartConfig {
   channels: string[]
   useProtobuf: boolean
   readTimeout?: number // milliseconds
+  /** HTTP-streaming fallback endpoint, e.g. `http://host:8000/connection/http_stream`. */
+  httpStreamUrl?: string
+  /** Extra HTTP headers for the WebSocket upgrade / HTTP-stream requests. */
+  headers?: Record<string, string>
+  /**
+   * Ask for the connection token with a `need_token` event (answer with
+   * `provideToken`) when `token` is not set. With `token` set, `need_token`
+   * also comes before the token expires. `provideToken('')` means "no token".
+   */
+  requestToken?: boolean
 }
 
 export interface PublishRequest {
   channel: string
-  data: string // base64 encoded data
+  data: string // base64 encoded data (default transport format)
+  dataEncoding?: 'base64' | 'rawJson'
+  /** @deprecated Map publish is not supported by centrifuge-client; a non-zero type is rejected. */
+  type?: number
+  /** @deprecated Map publish is not supported by centrifuge-client. */
+  key?: string
+  /** @deprecated Map publish is not supported by centrifuge-client. */
+  removed?: boolean
 }
 
 export interface RpcRequest {
   method: string
   data: string // base64 encoded data
+  dataEncoding?: 'base64' | 'rawJson'
 }
 
 export interface PresenceRequest {
@@ -34,12 +59,14 @@ export interface PresenceStatsRequest {
 export interface HistoryRequest {
   channel: string
   limit?: number
+  /** @deprecated Ignored. */
   since?: string
   reverse?: boolean
 }
 
 export interface SendRequest {
   data: string // base64 encoded data
+  dataEncoding?: 'base64' | 'rawJson'
 }
 
 export interface RefreshRequest {
@@ -49,11 +76,57 @@ export interface RefreshRequest {
 export interface SubRefreshRequest {
   channel: string
   token: string
+  /** @deprecated track/untrack is not supported by centrifuge-client; rejected. */
+  items?: KeyedItem[]
+  /** @deprecated track/untrack is not supported by centrifuge-client; rejected. */
+  untrackKeys?: string[]
+  /** @deprecated Only 0 (token refresh) is supported. */
+  type?: number
+  /** @deprecated Ignored. */
+  signature?: string
+}
+
+export interface KeyedItem {
+  key: string
+  version: number
+}
+
+export interface SubscribeOptions {
+  channel: string
+  token?: string
+  recoverable?: boolean
+  joinLeave?: boolean
+  positioned?: boolean
+  /** Fossil delta compression (the server must allow it for the channel). */
+  delta?: boolean
+  /** Resume from a saved position (see `SubscribedStatus.streamPosition`). */
+  since?: StreamPosition
+}
+
+export interface StreamPosition {
+  offset: number
+  epoch: string
+}
+
+export interface SubscribedStatus extends ChannelStatus {
+  wasRecovering: boolean
+  recovered: boolean
+  streamPosition?: StreamPosition | null
 }
 
 export interface PublicationData {
   channel: string
   data: string // base64 encoded data
+  dataEncoding?: 'base64' | 'rawJson'
+  rawJson?: unknown
+  offset?: number
+  info?: {
+    client: string
+    user: string
+    connInfo: string
+    chanInfo: string
+  }
+  tags?: Record<string, string>
 }
 
 export interface ConnectionStatus {
@@ -125,6 +198,10 @@ export async function setToken(token: string): Promise<void> {
   return await invoke('plugin:centrifugo|set_token', { token })
 }
 
+export async function provideToken(token: string): Promise<void> {
+  return await invoke('plugin:centrifugo|provide_token', { token })
+}
+
 /**
  * Publish message to channel
  */
@@ -168,21 +245,25 @@ export async function send(request: SendRequest): Promise<void> {
 }
 
 /**
- * Refresh authentication token
+ * Answer a pending `need_token` request with a fresh connection token, or,
+ * when none is pending, set the token for the next connect. The SDK refreshes
+ * tokens itself (it emits `need_token` before expiry).
  */
 export async function refresh(request: RefreshRequest): Promise<void> {
   return await invoke('plugin:centrifugo|refresh', { request })
 }
 
 /**
- * Refresh subscription token
+ * Answer a pending `need_sub_token` request for `request.channel` (sent for
+ * subscriptions created with a `token`, before it expires).
  */
 export async function subRefresh(request: SubRefreshRequest): Promise<void> {
   return await invoke('plugin:centrifugo|sub_refresh', { request })
 }
 
 /**
- * Ping server
+ * @deprecated The SDK keeps the connection alive with server pings and has no
+ * client ping. Resolves when connected, rejects otherwise.
  */
 export async function ping(): Promise<void> {
   return await invoke('plugin:centrifugo|ping')
@@ -216,6 +297,10 @@ export async function addSubscription(channel: string): Promise<void> {
   return await invoke('plugin:centrifugo|add_subscription', { channel })
 }
 
+export async function addSubscriptionWithOptions(options: SubscribeOptions): Promise<void> {
+  return await invoke('plugin:centrifugo|add_subscription_with_options', { options })
+}
+
 /**
  * Remove subscription from channel
  */
@@ -223,14 +308,36 @@ export async function removeSubscription(channel: string): Promise<void> {
   return await invoke('plugin:centrifugo|remove_subscription', { channel })
 }
 
+export async function removeAllSubscriptions(): Promise<void> {
+  return await invoke('plugin:centrifugo|remove_all_subscriptions')
+}
+
 /**
  * Listen to Centrifugo events
  */
-export async function onCentrifugoEvent(
-  event: 'connecting' | 'connected' | 'disconnected' | 'error' | 'subscribed' | 'unsubscribed' | 'subscribing' | 'publication',
-  callback: (data: any) => void
+export async function onCentrifugoEvent<T = unknown>(
+  event:
+    | 'connecting'
+    | 'connected'
+    | 'disconnected'
+    | 'error'
+    | 'subscribed'
+    | 'unsubscribed'
+    | 'subscribing'
+    | 'publication'
+    | 'need_token'
+    | 'need_sub_token'
+    | 'join'
+    | 'leave'
+    | 'server_subscribed'
+    | 'server_subscribing'
+    | 'server_unsubscribed'
+    | 'server_publication'
+    | 'server_join'
+    | 'server_leave',
+  callback: (data: T) => void
 ): Promise<UnlistenFn> {
-  return await listen(`centrifugo:${event}`, callback)
+  return await listen<T>(`centrifugo:${event}`, (eventData) => callback(eventData.payload))
 }
 
 // Event listener helpers
@@ -246,7 +353,7 @@ export const onDisconnected = async (callback: (data: TauriEventWrapper<Connecti
 export const onError = async (callback: (data: TauriEventWrapper<ErrorData>) => void): Promise<UnlistenFn> => 
   await onCentrifugoEvent('error', callback)
 
-export const onSubscribed = async (callback: (data: TauriEventWrapper<ChannelStatus>) => void): Promise<UnlistenFn> => 
+export const onSubscribed = async (callback: (data: TauriEventWrapper<SubscribedStatus>) => void): Promise<UnlistenFn> => 
   await onCentrifugoEvent('subscribed', callback)
 
 export const onUnsubscribed = async (callback: (data: TauriEventWrapper<ChannelStatus>) => void): Promise<UnlistenFn> => 
@@ -258,11 +365,48 @@ export const onSubscribing = async (callback: (data: TauriEventWrapper<ChannelSt
 export const onPublication = async (callback: (data: TauriEventWrapper<PublicationData>) => void): Promise<UnlistenFn> => 
   await onCentrifugoEvent('publication', callback)
 
-// Convenient event listeners for messages
-export const onMessage = async (callback: (data: { channel: string; data: any }) => void): Promise<UnlistenFn> => 
+export const onNeedToken = async (
+  callback: (data: TauriEventWrapper<ConnectionStatus>) => void
+): Promise<UnlistenFn> => await onCentrifugoEvent('need_token', callback)
+
+export const onNeedSubToken = async (
+  callback: (data: TauriEventWrapper<ChannelStatus & { ts: number }>) => void
+): Promise<UnlistenFn> => await onCentrifugoEvent('need_sub_token', callback)
+
+export const onServerPublication = async (
+  callback: (data: TauriEventWrapper<PublicationData>) => void
+): Promise<UnlistenFn> => await onCentrifugoEvent('server_publication', callback)
+
+export const onPublicationRawJson = async (
+  callback: (data: { channel: string; data: unknown }) => void
+): Promise<UnlistenFn> =>
   await onCentrifugoEvent('publication', (pubData: TauriEventWrapper<PublicationData>) => {
+    if (pubData.payload.rawJson !== undefined) {
+      callback({ channel: pubData.payload.channel, data: pubData.payload.rawJson })
+    }
+  })
+
+export const onServerPublicationRawJson = async (
+  callback: (data: { channel: string; data: unknown }) => void
+): Promise<UnlistenFn> =>
+  await onCentrifugoEvent('server_publication', (pubData: TauriEventWrapper<PublicationData>) => {
+    if (pubData.payload.rawJson !== undefined) {
+      callback({ channel: pubData.payload.channel, data: pubData.payload.rawJson })
+    }
+  })
+
+// Convenient event listeners for messages
+export const onMessage = async <T = unknown>(callback: (data: { channel: string; data: T | string }) => void): Promise<UnlistenFn> => 
+  await onCentrifugoEvent('publication', (pubData: TauriEventWrapper<PublicationData>) => {
+    if (pubData.payload.rawJson !== undefined) {
+      callback({
+        channel: pubData.payload.channel,
+        data: pubData.payload.rawJson as T
+      })
+      return
+    }
     try {
-      const decodedData = utils.decodeJson(pubData.payload.data)
+      const decodedData = utils.decodeJson<T>(pubData.payload.data)
       callback({
         channel: pubData.payload.channel,
         data: decodedData
@@ -276,11 +420,15 @@ export const onMessage = async (callback: (data: { channel: string; data: any })
     }
   })
 
-export const onChannelMessage = async (channel: string, callback: (data: any) => void): Promise<UnlistenFn> => 
+export const onChannelMessage = async <T = unknown>(channel: string, callback: (data: T | string) => void): Promise<UnlistenFn> => 
   await onCentrifugoEvent('publication', (pubData: TauriEventWrapper<PublicationData>) => {
     if (pubData.payload.channel === channel) {
+      if (pubData.payload.rawJson !== undefined) {
+        callback(pubData.payload.rawJson as T)
+        return
+      }
       try {
-        const decodedData = utils.decodeJson(pubData.payload.data)
+        const decodedData = utils.decodeJson<T>(pubData.payload.data)
         callback(decodedData)
       } catch (error) {
         // If failed to decode JSON, return raw data
@@ -289,10 +437,18 @@ export const onChannelMessage = async (channel: string, callback: (data: any) =>
     }
   })
 
-export const onAnyMessage = async (callback: (data: { channel: string; data: any; timestamp: number }) => void): Promise<UnlistenFn> => 
+export const onAnyMessage = async <T = unknown>(callback: (data: { channel: string; data: T | string; timestamp: number }) => void): Promise<UnlistenFn> => 
   await onCentrifugoEvent('publication', (pubData: TauriEventWrapper<PublicationData>) => {
+    if (pubData.payload.rawJson !== undefined) {
+      callback({
+        channel: pubData.payload.channel,
+        data: pubData.payload.rawJson as T,
+        timestamp: Date.now()
+      })
+      return
+    }
     try {
-      const decodedData = utils.decodeJson(pubData.payload.data)
+      const decodedData = utils.decodeJson<T>(pubData.payload.data)
       callback({
         channel: pubData.payload.channel,
         data: decodedData,
@@ -332,7 +488,7 @@ export const utils = {
   /**
    * Encode object to base64 JSON
    */
-  encodeJson: (data: any): string => {
+  encodeJson: <T extends JsonValue>(data: T): string => {
     const jsonString = JSON.stringify(data)
     return utils.encode(jsonString)
   },
@@ -351,24 +507,34 @@ export const helpers = {
   /**
    * Publish JSON data to channel (automatically encodes to base64)
    */
-  publishJson: async (channel: string, data: any): Promise<void> => {
+  publishJson: async <T extends JsonValue = JsonValue>(channel: string, data: T): Promise<void> => {
     const base64Data = utils.encodeJson(data)
     await publish({ channel, data: base64Data })
+  },
+
+  publishRawJson: async <T extends JsonValue = JsonValue>(channel: string, data: T): Promise<void> => {
+    const jsonString = JSON.stringify(data)
+    await publish({ channel, data: jsonString, dataEncoding: 'rawJson' })
   },
 
   /**
    * Execute RPC with JSON data (automatically encodes/decodes)
    */
-  rpcJson: async (method: string, data: any): Promise<any> => {
+  rpcJson: async <TReq extends JsonValue = JsonValue, TRes = unknown>(method: string, data: TReq): Promise<TRes> => {
     const base64Data = utils.encodeJson(data)
     const result = await rpc({ method, data: base64Data })
-    return utils.decodeJson(result)
+    return utils.decodeJson<TRes>(result)
+  },
+
+  rpcRawJson: async <TReq extends JsonValue = JsonValue>(method: string, data: TReq): Promise<string> => {
+    const jsonString = JSON.stringify(data)
+    return await rpc({ method, data: jsonString, dataEncoding: 'rawJson' })
   },
 
   /**
    * Subscribe to channel and listen for messages
    */
-  subscribeToChannel: async (channel: string, callback: (data: any) => void): Promise<UnlistenFn> => {
+  subscribeToChannel: async <T = unknown>(channel: string, callback: (data: T | string) => void): Promise<UnlistenFn> => {
     await addSubscription(channel)
     return await onChannelMessage(channel, callback)
   },
@@ -376,12 +542,12 @@ export const helpers = {
   /**
    * Subscribe to multiple channels
    */
-  subscribeToChannels: async (channels: string[], callback: (data: { channel: string; data: any }) => void): Promise<UnlistenFn[]> => {
+  subscribeToChannels: async <T = unknown>(channels: string[], callback: (data: { channel: string; data: T | string }) => void): Promise<UnlistenFn[]> => {
     const unlisteners: UnlistenFn[] = []
     
     for (const channel of channels) {
       await addSubscription(channel)
-      const unlisten = await onChannelMessage(channel, (data) => {
+      const unlisten = await onChannelMessage<T>(channel, (data) => {
         callback({ channel, data })
       })
       unlisteners.push(unlisten)
