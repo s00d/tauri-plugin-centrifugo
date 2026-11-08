@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [Unreleased]
 
+### Fixed
+- `centrifugo:default` now includes `allow-provide-token`, `allow-add-subscription-with-options` and
+  `allow-remove-all-subscriptions`; with only the default set, `provideToken` (the token bridge),
+  `addSubscriptionWithOptions` and `removeAllSubscriptions` were denied.
+- Event listeners (`onConnected`, `onPublication`, ...) get the whole Tauri event again (`{ event, payload, id }`,
+  as typed and as in 0.1.x). 0.2.0 passed only the payload, so `onMessage`, `onChannelMessage`, `onAnyMessage`,
+  `onPublicationRawJson`, `onServerPublicationRawJson` and `helpers.subscribeToChannel(s)` threw on every publication.
+  Code written for 0.2.0 that reads `e.channel` must read `e.payload.channel`.
+
+### Removed
+- Stale `allow-/deny-start-connection` and `allow-/deny-stop-connection` permissions (no such commands).
+
+### Added
+- Documentation site: https://s00d.github.io/tauri-plugin-centrifugo/
+
 ## [0.2.0] - 2026-11-08
 
 ### Changed
