@@ -29,9 +29,9 @@ use tauri::{Manager, Runtime, Window};
 
 /// Establish a connection to Centrifugo server
 ///
-/// This command initializes the WebSocket connection and subscribes to
-/// the specified channels. The connection state is managed internally
-/// and events are emitted to the frontend.
+/// Closes a previous client, creates a new one, subscribes to `config.channels`
+/// and starts connecting. Returns at once; progress arrives as events, and the
+/// SDK reconnects with backoff by itself.
 ///
 /// # Parameters
 ///
@@ -40,8 +40,8 @@ use tauri::{Manager, Runtime, Window};
 ///
 /// # Returns
 ///
-/// - `Ok(())` on successful connection
-/// - `Err(Error)` if connection fails
+/// - `Ok(())` once connecting has started
+/// - `Err(Error)` on an invalid config (URL, header)
 ///
 /// # Events Emitted
 ///
@@ -59,8 +59,7 @@ pub async fn connect<R: Runtime>(window: Window<R>, config: StartConfig) -> Resu
 
 /// Close the connection to Centrifugo server
 ///
-/// This command gracefully closes the WebSocket connection and cleans up
-/// all subscriptions and event listeners.
+/// Closes the connection and drops the client with all its subscriptions.
 ///
 /// # Parameters
 ///
@@ -82,8 +81,8 @@ pub async fn disconnect<R: Runtime>(window: Window<R>) -> Result<()> {
 
 /// Set or update the authentication token
 ///
-/// This command allows updating the JWT token during an active session
-/// without reconnecting to the server.
+/// Replaces the connection token; the SDK uses it from the next connect
+/// attempt. Fails with `NotConnected` when there is no client.
 ///
 /// # Parameters
 ///
@@ -100,6 +99,10 @@ pub async fn set_token<R: Runtime>(window: Window<R>, token: String) -> Result<(
     centrifugo.set_token(token).await
 }
 
+/// Answer a pending `centrifugo:need_token` request
+///
+/// An empty token means "no token": anonymous on connect, unauthorized on
+/// refresh. Fails when no request is pending.
 #[tauri::command]
 pub async fn provide_token<R: Runtime>(window: Window<R>, token: String) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
@@ -108,8 +111,8 @@ pub async fn provide_token<R: Runtime>(window: Window<R>, token: String) -> Resu
 
 /// Publish a message to a specific channel
 ///
-/// The message data should be base64-encoded. The message will be
-/// broadcast to all clients subscribed to the specified channel.
+/// `data` is base64 unless `dataEncoding` is `rawJson`. Map publish
+/// (`type`/`key`/`removed`) is rejected with `Not supported`.
 ///
 /// # Parameters
 ///
@@ -124,7 +127,7 @@ pub async fn provide_token<R: Runtime>(window: Window<R>, token: String) -> Resu
 /// # Requirements
 ///
 /// - Must be connected to Centrifugo server
-/// - Channel must be subscribed to
+/// - The server must allow client publishing in the channel
 #[tauri::command]
 pub async fn publish<R: Runtime>(window: Window<R>, request: PublishRequest) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
@@ -157,7 +160,7 @@ pub async fn rpc<R: Runtime>(window: Window<R>, request: RpcRequest) -> Result<S
 
 /// Get presence information for a channel
 ///
-/// Returns a list of client identifiers currently subscribed to the channel.
+/// Returns the client IDs currently present in the channel.
 ///
 /// # Parameters
 ///
@@ -202,7 +205,8 @@ pub async fn presence_stats<R: Runtime>(
 
 /// Get message history for a channel
 ///
-/// Retrieves historical messages from a channel with optional filtering.
+/// Retrieves publications from the channel history (`limit`, `reverse`;
+/// `since` is ignored). The channel must have history enabled.
 ///
 /// # Parameters
 ///
@@ -224,7 +228,7 @@ pub async fn history<R: Runtime>(
 
 /// Send a message directly to the server
 ///
-/// Sends a message to the server (not to specific channels).
+/// Sends an async message to the server (not to a channel, no reply).
 ///
 /// # Parameters
 ///
@@ -241,9 +245,11 @@ pub async fn send<R: Runtime>(window: Window<R>, request: SendRequest) -> Result
     centrifugo.send(request).await
 }
 
-/// Refresh the authentication token
+/// Answer a pending `need_token` request
 ///
-/// Updates the client's authentication token during an active session.
+/// Answers a pending `centrifugo:need_token` request with the token; when none
+/// is pending, sets the token for the next connect. The SDK refreshes tokens
+/// itself before they expire.
 ///
 /// # Parameters
 ///
@@ -260,9 +266,11 @@ pub async fn refresh<R: Runtime>(window: Window<R>, request: RefreshRequest) -> 
     centrifugo.refresh(request).await
 }
 
-/// Refresh a subscription token for a specific channel
+/// Answer a pending `need_sub_token` request for a channel
 ///
-/// Updates the subscription token for a channel during an active session.
+/// Answers a pending `centrifugo:need_sub_token` request for `request.channel`.
+/// Fails when none is pending. Track/untrack fields are rejected with
+/// `Not supported`; `signature` is ignored.
 ///
 /// # Parameters
 ///
@@ -279,9 +287,10 @@ pub async fn sub_refresh<R: Runtime>(window: Window<R>, request: SubRefreshReque
     centrifugo.sub_refresh(request).await
 }
 
-/// Ping the Centrifugo server
+/// Deprecated: check that the client is connected
 ///
-/// Sends a ping to check server availability and latency.
+/// The SDK keeps the connection alive with server pings and has no client
+/// ping; this only fails with `NotConnected` when not connected.
 ///
 /// # Parameters
 ///
@@ -289,8 +298,8 @@ pub async fn sub_refresh<R: Runtime>(window: Window<R>, request: SubRefreshReque
 ///
 /// # Returns
 ///
-/// - `Ok(())` on successful ping
-/// - `Err(Error)` if ping fails
+/// - `Ok(())` when connected
+/// - `Err(Error::NotConnected)` otherwise
 #[tauri::command]
 pub async fn ping<R: Runtime>(window: Window<R>) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();
@@ -317,7 +326,8 @@ pub async fn is_connected<R: Runtime>(window: Window<R>) -> Result<bool> {
 
 /// Get current channel subscriptions
 ///
-/// Returns a map of channel names to subscription status.
+/// Returns the channels added through the plugin; the value is `true` while
+/// subscribed.
 ///
 /// # Parameters
 ///
@@ -335,7 +345,8 @@ pub async fn get_subscriptions<R: Runtime>(window: Window<R>) -> Result<HashMap<
 
 /// Get detailed connection state
 ///
-/// Returns a string representation of the current connection state.
+/// One of `connecting`, `connected`, `closed`, `disconnected` (also when there
+/// is no client).
 ///
 /// # Parameters
 ///
@@ -353,7 +364,8 @@ pub async fn get_connection_state<R: Runtime>(window: Window<R>) -> Result<Strin
 
 /// Add a new channel subscription
 ///
-/// Subscribes to a new channel and starts receiving messages from it.
+/// Subscribes to a channel with default options. Fails with `NotConnected`
+/// when there is no client.
 ///
 /// # Parameters
 ///
@@ -378,6 +390,14 @@ pub async fn add_subscription<R: Runtime>(window: Window<R>, channel: String) ->
         .await
 }
 
+/// Add a channel subscription with options
+///
+/// Token (private channel, refreshed via `centrifugo:need_sub_token`),
+/// recovery, join/leave, positioning, fossil delta, resume position.
+///
+/// # Events Emitted
+///
+/// - `centrifugo:subscribing`, `centrifugo:subscribed`, `centrifugo:error`
 #[tauri::command]
 pub async fn add_subscription_with_options<R: Runtime>(
     window: Window<R>,
@@ -391,7 +411,7 @@ pub async fn add_subscription_with_options<R: Runtime>(
 
 /// Remove a channel subscription
 ///
-/// Unsubscribes from a channel and stops receiving messages from it.
+/// Unsubscribes from a channel and forgets it. Unknown channels are ignored.
 ///
 /// # Parameters
 ///
@@ -414,6 +434,7 @@ pub async fn remove_subscription<R: Runtime>(window: Window<R>, channel: String)
         .await
 }
 
+/// Remove every channel subscription
 #[tauri::command]
 pub async fn remove_all_subscriptions<R: Runtime>(window: Window<R>) -> Result<()> {
     let centrifugo = window.state::<Centrifugo>();

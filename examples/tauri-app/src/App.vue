@@ -80,46 +80,46 @@ async function setupListeners(): Promise<void> {
     await onConnecting((e) => {
       isConnecting.value = true;
       connectionStatus.value = "Connecting";
-      log(`connecting: ${JSON.stringify(e)}`);
+      log(`connecting: ${JSON.stringify(e.payload)}`);
     })
   );
   unlisteners.push(
     await onConnected((e) => {
       isConnecting.value = false;
       connectionStatus.value = "Connected";
-      log(`connected: ${JSON.stringify(e)}`);
+      log(`connected: ${JSON.stringify(e.payload)}`);
     })
   );
   unlisteners.push(
     await onDisconnected((e) => {
       isConnecting.value = false;
       connectionStatus.value = "Disconnected";
-      log(`disconnected: ${JSON.stringify(e)}`);
+      log(`disconnected: ${JSON.stringify(e.payload)}`);
     })
   );
   unlisteners.push(
     await onError((e) => {
       isConnecting.value = false;
       connectionStatus.value = "Error";
-      log(`error: ${e.error}`);
+      log(`error: ${e.payload.error}`);
     })
   );
   unlisteners.push(
     await onSubscribed((e) => {
-      subscriptions.value[e.channel] = true;
+      subscriptions.value[e.payload.channel] = true;
       subscriptions.value = { ...subscriptions.value };
-      log(`subscribed: ${e.channel}`);
+      log(`subscribed: ${e.payload.channel}`);
     })
   );
   unlisteners.push(
     await onUnsubscribed((e) => {
-      subscriptions.value[e.channel] = false;
+      subscriptions.value[e.payload.channel] = false;
       subscriptions.value = { ...subscriptions.value };
-      log(`unsubscribed: ${e.channel}`);
+      log(`unsubscribed: ${e.payload.channel}`);
     })
   );
   unlisteners.push(
-    await onPublication((payload) => {
+    await onPublication(({ payload }) => {
       try {
         const decoded = payload.rawJson ?? utils.decodeJson<JsonValue>(payload.data);
         log(`publication[${payload.channel}]: ${JSON.stringify(decoded)}`);

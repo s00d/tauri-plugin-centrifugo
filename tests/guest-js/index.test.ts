@@ -78,4 +78,32 @@ describe("guest-js API helpers", () => {
     ret();
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
+
+  it("listeners get the whole Tauri event; message helpers read its payload", async () => {
+    const api = await import("../../guest-js/index");
+    const handlers: Record<string, ((e: unknown) => void)[]> = {};
+    const emit = (name: string, e: unknown) => handlers[name]?.forEach((cb) => cb(e));
+    listenMock.mockImplementation(async (name: string, cb: (e: unknown) => void) => {
+      (handlers[name] ??= []).push(cb);
+      return () => {};
+    });
+    const subscribed = vi.fn();
+    const message = vi.fn();
+    const channelMessage = vi.fn();
+    await api.onSubscribed(subscribed);
+    await api.onMessage(message);
+    await api.onChannelMessage("news", channelMessage);
+
+    const sub = { event: "centrifugo:subscribed", id: 1, payload: { channel: "news", wasRecovering: false, recovered: false } };
+    emit("centrifugo:subscribed", sub);
+    expect(subscribed).toHaveBeenCalledWith(sub);
+
+    emit("centrifugo:publication", {
+      event: "centrifugo:publication",
+      id: 2,
+      payload: { channel: "news", data: api.utils.encodeJson({ n: 1 }) },
+    });
+    expect(message).toHaveBeenCalledWith({ channel: "news", data: { n: 1 } });
+    expect(channelMessage).toHaveBeenCalledWith({ n: 1 });
+  });
 });
