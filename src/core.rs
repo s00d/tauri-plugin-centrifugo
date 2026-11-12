@@ -381,13 +381,13 @@ impl Centrifugo {
 
     /// Answers a pending `need_sub_token` request for the channel.
     pub async fn sub_refresh(&self, request: SubRefreshRequest) -> Result<()> {
-        self.client().await?;
         if request.r#type.unwrap_or(0) != 0
             || request.items.is_some()
             || request.untrack_keys.is_some()
         {
             return Err(Error::Unsupported("track/untrack sub refresh"));
         }
+        self.client().await?;
         let waiter = self.token_waiters.write().await.remove(&request.channel);
         let waiter = waiter.ok_or_else(|| {
             Error::RequestError(format!(
@@ -553,20 +553,160 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn map_publish_is_rejected_before_network() {
+    async fn more_operations_fail_without_client() {
         let core = Centrifugo::new();
-        let req = PublishRequest {
+        let app = tauri::test::mock_app();
+        assert!(matches!(
+            core.set_token("t".into()).await,
+            Err(Error::NotConnected)
+        ));
+        assert!(matches!(
+            core.presence_stats(PresenceStatsRequest {
+                channel: "news".into()
+            })
+            .await,
+            Err(Error::NotConnected)
+        ));
+        assert!(matches!(
+            core.add_subscription(app.handle().clone(), "news".into())
+                .await,
+            Err(Error::NotConnected)
+        ));
+        assert!(matches!(
+            core.remove_all_subscriptions(app.handle().clone()).await,
+            Err(Error::NotConnected)
+        ));
+        assert!(matches!(
+            core.send(SendRequest {
+                data: BASE64.encode(b"{}"),
+                data_encoding: None
+            })
+            .await,
+            Err(Error::NotConnected)
+        ));
+        // The payload is checked before the connection.
+        assert!(matches!(
+            core.send(SendRequest {
+                data: "not base64!".into(),
+                data_encoding: None
+            })
+            .await,
+            Err(Error::Base64Error(_))
+        ));
+        assert!(matches!(
+            core.provide_token("t".into()).await,
+            Err(Error::RequestError(_))
+        ));
+    }
+
+    fn publish_req(
+        r#type: Option<i32>,
+        key: Option<&str>,
+        removed: Option<bool>,
+    ) -> PublishRequest {
+        PublishRequest {
             channel: "news".into(),
             data: BASE64.encode(b"{}"),
             data_encoding: None,
-            r#type: Some(1),
-            key: Some("k".into()),
-            removed: None,
-        };
+            r#type,
+            key: key.map(Into::into),
+            removed,
+        }
+    }
+
+    #[tokio::test]
+    async fn map_publish_is_rejected_before_network() {
+        let core = Centrifugo::new();
+        // Any one map field is enough to reject.
+        for req in [
+            publish_req(Some(1), None, None),
+            publish_req(None, Some("k"), None),
+            publish_req(None, None, Some(true)),
+        ] {
+            assert!(
+                matches!(core.publish(req.clone()).await, Err(Error::Unsupported(_))),
+                "{req:?}"
+            );
+        }
+        // Defaults of the map fields are a plain publish (fails only on the connection).
+        for req in [
+            publish_req(None, None, None),
+            publish_req(Some(0), Some(""), Some(false)),
+        ] {
+            assert!(
+                matches!(core.publish(req.clone()).await, Err(Error::NotConnected)),
+                "{req:?}"
+            );
+        }
+    }
+
+    fn sub_refresh_req(
+        r#type: Option<i32>,
+        items: Option<Vec<KeyedItem>>,
+        untrack_keys: Option<Vec<String>>,
+    ) -> SubRefreshRequest {
+        SubRefreshRequest {
+            channel: "news".into(),
+            token: "t".into(),
+            items,
+            untrack_keys,
+            r#type,
+            signature: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn track_untrack_sub_refresh_is_rejected_before_network() {
+        let core = Centrifugo::new();
+        for req in [
+            sub_refresh_req(Some(1), None, None),
+            sub_refresh_req(None, Some(vec![]), None),
+            sub_refresh_req(None, None, Some(vec!["k".into()])),
+        ] {
+            assert!(
+                matches!(
+                    core.sub_refresh(req.clone()).await,
+                    Err(Error::Unsupported(_))
+                ),
+                "{req:?}"
+            );
+        }
         assert!(matches!(
-            core.publish(req).await,
-            Err(Error::Unsupported(_))
+            core.sub_refresh(sub_refresh_req(Some(0), None, None)).await,
+            Err(Error::NotConnected)
         ));
+    }
+
+    #[test]
+    fn now_is_wall_clock_millis() {
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        assert!((now() - wall).abs() < 60_000, "{} vs {wall}", now());
+    }
+
+    #[tokio::test]
+    async fn state_is_connecting_while_the_server_is_unreachable() {
+        let core = Centrifugo::new();
+        let app = tauri::test::mock_app();
+        // Port 9 (discard) is closed: the client keeps reconnecting.
+        let config = StartConfig {
+            url: "ws://127.0.0.1:9/connection/websocket".into(),
+            token: None,
+            name: None,
+            version: None,
+            channels: vec![],
+            use_protobuf: false,
+            read_timeout: None,
+            http_stream_url: None,
+            headers: None,
+            request_token: None,
+        };
+        core.connect(app.handle().clone(), config).await.unwrap();
+        assert_eq!(core.get_connection_state().await.unwrap(), "connecting");
+        core.disconnect().await.unwrap();
+        assert_eq!(core.get_connection_state().await.unwrap(), "disconnected");
     }
 
     #[test]

@@ -1,0 +1,15 @@
+# cargo-mutants (https://mutants.rs): `cargo mutants` mutates src/ and runs `cargo test`.
+# The e2e tests in tests/real_centrifugo.rs need a `centrifugo` binary (or $CENTRIFUGO_BIN);
+# without it they are skipped and most mutants survive. CI runs this on Linux.
+
+exclude_re = [
+    # Compiled only for Android: never built by desktop tests.
+    "android_tls",
+    # The SDK is `Closed` only after `close()`, and the plugin drops the
+    # client right then: the arm can't be observed (reports "disconnected").
+    "delete match arm Some\\(State::Closed\\) in Centrifugo::get_connection_state",
+    # Needs a temporary subscribe error from the server or a failing token
+    # getter; Centrifugo produces neither on demand (a rejected refresh
+    # closes the transport instead).
+    "delete match arm SubscriptionEvent::Error\\(e\\) in forward_subscription_events",
+]

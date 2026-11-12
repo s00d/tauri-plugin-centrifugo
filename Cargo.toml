@@ -33,7 +33,7 @@ webpki-roots = "1"
 tauri-plugin = { version = "2.3.0", features = ["build"] }
 
 [dev-dependencies]
-tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 tauri = { version = "2.6.2", features = ["test"] }
 hmac = "0.13"
 sha2 = "0.11"

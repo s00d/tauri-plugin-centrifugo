@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file. See [standa
 
 ## [Unreleased]
 
+### Changed
+- `subRefresh` with track/untrack fields fails with `Not supported` even when not connected
+  (it was `NotConnected` first), like map publish.
+
+### Added
+- Mutation testing with [cargo-mutants](https://mutants.rs) (`.cargo/mutants.toml`, CI workflow `mutants`).
+- Tests: every command over IPC against a real Centrifugo, client/subscription/server-side events
+  (`connecting`, `disconnected`, `error`, `join`/`leave`, `server_*` via the server API), each map publish /
+  track field on its own.
+
 ## [0.2.1] - 2026-11-09
 
 ### Fixed

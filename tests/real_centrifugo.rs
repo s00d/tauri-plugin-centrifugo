@@ -20,6 +20,7 @@ use tauri_plugin_centrifugo::models::*;
 use tokio::sync::mpsc;
 
 const SECRET: &str = "plugin-test-secret";
+const API_KEY: &str = "plugin-test-api-key";
 
 struct Server {
     child: Child,
@@ -91,6 +92,17 @@ async fn spawn_on_free_port(bin: &str, anonymous: bool) -> Option<Server> {
         "join_leave": true,
         "http_stream": true,
         "allowed_origins": ["*"],
+        // Server API (for server-side actions) and a personal server-side
+        // subscription `personal:#<user>` for every connection with a user.
+        "api_key": API_KEY,
+        "user_subscribe_to_personal": true,
+        "user_personal_channel_namespace": "personal",
+        "namespaces": [{
+            "name": "personal",
+            "presence": true,
+            "join_leave": true,
+            "force_push_join_leave": true,
+        }],
     });
     let cfg_path = dir.join("config.json");
     std::fs::write(&cfg_path, config.to_string()).unwrap();
@@ -121,6 +133,28 @@ async fn spawn_on_free_port(bin: &str, anonymous: bool) -> Option<Server> {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("centrifugo did not start on port {port}");
+}
+
+/// Calls the server HTTP API (`POST /api/<method>`); returns the JSON reply.
+async fn api(port: u16, method: &str, body: Value) -> Value {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let body = body.to_string();
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let request = format!(
+        "POST /api/{method} HTTP/1.1\r\nHost: 127.0.0.1\r\nX-API-Key: {API_KEY}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).await.unwrap();
+    let mut reply = String::new();
+    stream.read_to_string(&mut reply).await.unwrap();
+    let (head, json) = reply.split_once("\r\n\r\n").unwrap();
+    assert!(head.starts_with("HTTP/1.1 200"), "{method}: {reply}");
+    let json: Value = serde_json::from_str(json).unwrap();
+    assert!(json.get("error").is_none(), "{method}: {json}");
+    json
 }
 
 fn jwt(sub: &str) -> String {
@@ -169,11 +203,16 @@ impl Events {
     }
 
     async fn wait(&mut self, name: &str) -> Value {
+        self.wait_for(name, |_| true).await
+    }
+
+    /// The next `name` event whose payload matches `pred`.
+    async fn wait_for(&mut self, name: &str, pred: impl Fn(&Value) -> bool) -> Value {
         let mut seen = Vec::new();
         let deadline = tokio::time::timeout(Duration::from_secs(10), async {
             loop {
                 let (n, v) = self.0.recv().await.expect("events channel closed");
-                if n == name {
+                if n == name && pred(&v) {
                     return v;
                 }
                 seen.push(format!("{n}: {v}"));
@@ -458,4 +497,406 @@ async fn connection_and_subscription_tokens_are_refreshed_before_expiry() {
         );
     }
     core.disconnect().await.unwrap();
+}
+
+async fn wait_state(core: &Centrifugo, want: &str) {
+    for _ in 0..200 {
+        if core.get_connection_state().await.unwrap() == want {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!(
+        "state is {}, not {want}",
+        core.get_connection_state().await.unwrap()
+    );
+}
+
+#[tokio::test]
+async fn rejected_connection_is_not_retried() {
+    let Some(server) = start(false).await else {
+        return;
+    };
+    let app = mock_app();
+    let mut events = Events::listen(&app, &["connecting", "error", "disconnected"]);
+    let core = Centrifugo::new();
+
+    // No token on a server that needs one: the server refuses, for good.
+    core.connect(app.handle().clone(), start_config(server.ws(), &[]))
+        .await
+        .unwrap();
+    let connecting = events.wait("connecting").await;
+    assert!(connecting["ts"].as_i64().unwrap() > 0, "{connecting}");
+    let disconnected = events.wait("disconnected").await;
+    assert!(disconnected["code"].as_u64().unwrap() > 0, "{disconnected}");
+    // Terminal for the SDK (no reconnect); `closed` is only after close().
+    wait_state(&core, "disconnected").await;
+    assert!(!core.is_connected().await.unwrap());
+    core.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn join_leave_and_server_side_subscription_events() {
+    let Some(server) = start(false).await else {
+        return;
+    };
+    let app = mock_app();
+    let mut events = Events::listen(
+        &app,
+        &[
+            "subscribing",
+            "subscribed",
+            "join",
+            "leave",
+            "server_subscribed",
+            "server_subscribing",
+            "server_unsubscribed",
+            "server_publication",
+            "server_join",
+            "server_leave",
+        ],
+    );
+    let core = Centrifugo::new();
+    let mut config = start_config(server.ws(), &[]);
+    config.token = Some(jwt("u1"));
+    core.connect(app.handle().clone(), config).await.unwrap();
+    // The server subscribes every user to its personal channel.
+    let personal = "personal:#u1";
+    assert_eq!(events.wait("server_subscribed").await["channel"], personal);
+
+    let mut opts = SubscribeOptions::channel("room");
+    opts.join_leave = Some(true);
+    core.add_subscription_with_options(app.handle().clone(), opts)
+        .await
+        .unwrap();
+    assert_eq!(events.wait("subscribing").await["channel"], "room");
+    assert_eq!(events.wait("subscribed").await["channel"], "room");
+
+    // Another user enters and leaves the room.
+    let other_app = mock_app();
+    let other = Centrifugo::new();
+    let mut other_config = start_config(server.ws(), &["room"]);
+    other_config.token = Some(jwt("u2"));
+    other
+        .connect(other_app.handle().clone(), other_config)
+        .await
+        .unwrap();
+    // Our own join comes first.
+    let join = events.wait_for("join", |v| v["info"]["user"] == "u2").await;
+    assert_eq!(join["channel"], "room");
+    other.disconnect().await.unwrap();
+    let leave = events.wait("leave").await;
+    assert_eq!(
+        (&leave["channel"], &leave["info"]["user"]),
+        (&json!("room"), &json!("u2"))
+    );
+
+    // Server-side publication into the personal channel.
+    api(
+        server.port,
+        "publish",
+        json!({"channel": personal, "data": {"n": 7}}),
+    )
+    .await;
+    let p = events.wait("server_publication").await;
+    assert_eq!(
+        (&p["channel"], &p["rawJson"]),
+        (&json!(personal), &json!({"n": 7}))
+    );
+
+    // A second connection of the same user joins and leaves the personal channel.
+    let same_app = mock_app();
+    let same = Centrifugo::new();
+    let mut same_config = start_config(server.ws(), &[]);
+    same_config.token = Some(jwt("u1"));
+    same.connect(same_app.handle().clone(), same_config)
+        .await
+        .unwrap();
+    let join = events.wait("server_join").await;
+    assert_eq!(
+        (&join["channel"], &join["user"]),
+        (&json!(personal), &json!("u1"))
+    );
+    same.disconnect().await.unwrap();
+    let leave = events.wait("server_leave").await;
+    assert_eq!(
+        (&leave["channel"], &leave["user"]),
+        (&json!(personal), &json!("u1"))
+    );
+
+    // The server drops the connection (with reconnect): server-side
+    // subscriptions go `subscribing` until the client is back.
+    api(
+        server.port,
+        "disconnect",
+        json!({"user": "u1", "disconnect": {"code": 4000, "reason": "test"}}),
+    )
+    .await;
+    assert_eq!(events.wait("server_subscribing").await["channel"], personal);
+    assert_eq!(events.wait("server_subscribed").await["channel"], personal);
+    // Then it drops the subscription.
+    api(
+        server.port,
+        "unsubscribe",
+        json!({"channel": personal, "user": "u1"}),
+    )
+    .await;
+    assert_eq!(
+        events.wait("server_unsubscribed").await["channel"],
+        personal
+    );
+    core.disconnect().await.unwrap();
+}
+
+#[tokio::test]
+async fn client_error_event_when_the_transport_fails() {
+    let app = mock_app();
+    let mut events = Events::listen(&app, &["error"]);
+    let core = Centrifugo::new();
+    let url = format!("ws://127.0.0.1:{}/connection/websocket", free_port());
+    core.connect(app.handle().clone(), start_config(url, &[]))
+        .await
+        .unwrap();
+    let error = events.wait("error").await;
+    assert!(!error["error"].as_str().unwrap().is_empty(), "{error}");
+    core.disconnect().await.unwrap();
+}
+
+/// A mock app with every plugin command registered, and its main webview.
+fn ipc_app() -> (tauri::App<MockRuntime>, tauri::WebviewWindow<MockRuntime>) {
+    use tauri_plugin_centrifugo::commands::*;
+    let app = tauri::test::mock_builder()
+        .manage(Centrifugo::new())
+        .invoke_handler(tauri::generate_handler![
+            connect,
+            disconnect,
+            set_token,
+            provide_token,
+            publish,
+            rpc,
+            presence,
+            presence_stats,
+            history,
+            send,
+            refresh,
+            sub_refresh,
+            ping,
+            is_connected,
+            get_subscriptions,
+            get_connection_state,
+            add_subscription,
+            add_subscription_with_options,
+            remove_subscription,
+            remove_all_subscriptions,
+        ])
+        .build(tauri::test::mock_context(tauri::test::noop_assets()))
+        .unwrap();
+    let webview = tauri::WebviewWindowBuilder::new(&app, "main", Default::default())
+        .build()
+        .unwrap();
+    (app, webview)
+}
+
+/// Invokes a command the way the JS API does; `Err` is the error text.
+fn invoke(
+    webview: &tauri::WebviewWindow<MockRuntime>,
+    cmd: &str,
+    args: Value,
+) -> Result<Value, String> {
+    let request = tauri::webview::InvokeRequest {
+        cmd: cmd.into(),
+        callback: tauri::ipc::CallbackFn(0),
+        error: tauri::ipc::CallbackFn(1),
+        // The app's own origin: tauri rejects app commands from others.
+        url: if cfg!(windows) {
+            "http://tauri.localhost"
+        } else {
+            "tauri://localhost"
+        }
+        .parse()
+        .unwrap(),
+        body: tauri::ipc::InvokeBody::Json(args),
+        headers: Default::default(),
+        invoke_key: tauri::test::INVOKE_KEY.to_string(),
+    };
+    tauri::test::get_ipc_response(webview, request)
+        .map(|r| r.deserialize::<Value>().unwrap())
+        .map_err(|e| e.to_string())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn every_command_over_ipc() {
+    let Some(server) = start(true).await else {
+        return;
+    };
+    let (app, w) = ipc_app();
+    let mut events = Events::listen(
+        &app,
+        &["connected", "subscribed", "unsubscribed", "publication"],
+    );
+    let not_connected = |r: Result<Value, String>| r.unwrap_err().contains("NotConnected");
+
+    // Before connect.
+    assert!(not_connected(invoke(
+        &w,
+        "set_token",
+        json!({"token": "t"})
+    )));
+    assert!(not_connected(invoke(
+        &w,
+        "refresh",
+        json!({"request": {"token": "t"}})
+    )));
+    assert!(not_connected(invoke(
+        &w,
+        "sub_refresh",
+        json!({"request": {"channel": "news", "token": "t"}})
+    )));
+    assert!(
+        invoke(&w, "provide_token", json!({"token": "t"}))
+            .unwrap_err()
+            .contains("No token request")
+    );
+    assert_eq!(invoke(&w, "is_connected", json!({})).unwrap(), json!(false));
+
+    let url = server.ws();
+    invoke(
+        &w,
+        "connect",
+        json!({"config": {"url": url, "channels": ["news"], "useProtobuf": false}}),
+    )
+    .unwrap();
+    events.wait("connected").await;
+    events
+        .wait_for("subscribed", |v| v["channel"] == "news")
+        .await;
+    assert_eq!(invoke(&w, "is_connected", json!({})).unwrap(), json!(true));
+    assert_eq!(
+        invoke(&w, "get_connection_state", json!({})).unwrap(),
+        json!("connected")
+    );
+    assert_eq!(
+        invoke(&w, "get_subscriptions", json!({})).unwrap(),
+        json!({"news": true})
+    );
+    invoke(&w, "ping", json!({})).unwrap();
+    invoke(&w, "set_token", json!({"token": jwt("u1")})).unwrap();
+    // A connection token refresh nobody asked for is kept for the next connect.
+    invoke(&w, "refresh", json!({"request": {"token": jwt("u1")}})).unwrap();
+    assert!(
+        invoke(
+            &w,
+            "sub_refresh",
+            json!({"request": {"channel": "news", "token": "t"}})
+        )
+        .unwrap_err()
+        .contains("No token request")
+    );
+
+    invoke(&w, "add_subscription", json!({"channel": "a"})).unwrap();
+    events.wait_for("subscribed", |v| v["channel"] == "a").await;
+    invoke(
+        &w,
+        "add_subscription_with_options",
+        json!({"options": {"channel": "b", "recoverable": true}}),
+    )
+    .unwrap();
+    let b = events.wait_for("subscribed", |v| v["channel"] == "b").await;
+    assert!(b["streamPosition"]["epoch"].is_string(), "{b}");
+
+    invoke(
+        &w,
+        "publish",
+        json!({"request": {"channel": "news", "data": BASE64.encode(br#"{"n":1}"#)}}),
+    )
+    .unwrap();
+    assert_eq!(events.wait("publication").await["rawJson"], json!({"n": 1}));
+    let history = invoke(
+        &w,
+        "history",
+        json!({"request": {"channel": "news", "limit": 10}}),
+    )
+    .unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1, "{history}");
+    assert_eq!(history[0]["rawJson"], json!({"n": 1}));
+
+    // A second (anonymous) client in the channel: 2 clients, 1 user.
+    let other_app = mock_app();
+    let other = Centrifugo::new();
+    let mut other_events = Events::listen(&other_app, &["subscribed"]);
+    other
+        .connect(
+            other_app.handle().clone(),
+            start_config(server.ws(), &["news"]),
+        )
+        .await
+        .unwrap();
+    other_events.wait("subscribed").await;
+    assert_eq!(
+        invoke(
+            &w,
+            "presence_stats",
+            json!({"request": {"channel": "news"}})
+        )
+        .unwrap(),
+        json!([2, 1])
+    );
+    assert_eq!(
+        invoke(&w, "presence", json!({"request": {"channel": "news"}}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    other.disconnect().await.unwrap();
+
+    // No RPC proxy on the server: the error comes back.
+    assert!(
+        invoke(
+            &w,
+            "rpc",
+            json!({"request": {"method": "m", "data": BASE64.encode(b"{}")}})
+        )
+        .is_err()
+    );
+    assert!(invoke(&w, "send", json!({"request": {"data": "not base64!"}})).is_err());
+
+    invoke(&w, "remove_subscription", json!({"channel": "a"})).unwrap();
+    events
+        .wait_for("unsubscribed", |v| v["channel"] == "a")
+        .await;
+    let subs = invoke(&w, "get_subscriptions", json!({})).unwrap();
+    assert!(subs.get("a").is_none() && subs.get("b").is_some(), "{subs}");
+    invoke(&w, "remove_all_subscriptions", json!({})).unwrap();
+    assert_eq!(
+        invoke(&w, "get_subscriptions", json!({})).unwrap(),
+        json!({})
+    );
+
+    // Still connected here, so the checks below see `disconnect` at work.
+    assert_eq!(invoke(&w, "is_connected", json!({})).unwrap(), json!(true));
+    invoke(&w, "disconnect", json!({})).unwrap();
+    assert_eq!(invoke(&w, "is_connected", json!({})).unwrap(), json!(false));
+    assert_eq!(
+        invoke(&w, "get_connection_state", json!({})).unwrap(),
+        json!("disconnected")
+    );
+    assert!(not_connected(invoke(&w, "ping", json!({}))));
+
+    // Last: the server has no async-message handler and drops a client that sends.
+    invoke(
+        &w,
+        "connect",
+        json!({"config": {"url": url, "channels": [], "useProtobuf": false}}),
+    )
+    .unwrap();
+    events.wait("connected").await;
+    invoke(
+        &w,
+        "send",
+        json!({"request": {"data": BASE64.encode(b"{}")}}),
+    )
+    .unwrap();
+    invoke(&w, "disconnect", json!({})).unwrap();
 }
