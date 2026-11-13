@@ -9,7 +9,7 @@ All notable changes to this project will be documented in this file. See [standa
   (it was `NotConnected` first), like map publish.
 
 ### Added
-- Mutation testing with [cargo-mutants](https://mutants.rs) (`.cargo/mutants.toml`, CI workflow `mutants`).
+- Mutation testing with [cargo-mutants](https://mutants.rs) (`.cargo/mutants.toml`, run locally).
 - Scenario tests (`tests/`, replacing the per-function tests): proptest command sequences over IPC
   checked against a model after every step, offline and with two apps against a real Centrifugo (replies, events,
   history, presence), plus stories for tokens, server-side subscriptions (`server_*` via the server API) and

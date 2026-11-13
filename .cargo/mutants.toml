@@ -1,6 +1,6 @@
 # cargo-mutants (https://mutants.rs): `cargo mutants` mutates src/ and runs `cargo test`.
 # The scenario tests in tests/ need a `centrifugo` binary (or $CENTRIFUGO_BIN);
-# without it they are skipped and most mutants survive. CI runs this on Linux.
+# without it they are skipped and most mutants survive. Run locally only (not in CI).
 
 exclude_re = [
     # Compiled only for Android: never built by desktop tests.
