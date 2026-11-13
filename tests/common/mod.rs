@@ -28,7 +28,9 @@ pub const HISTORY_SIZE: usize = 5;
 
 pub const SECRET: &str = "plugin-test-secret";
 pub const API_KEY: &str = "plugin-test-api-key";
-pub const WAIT: Duration = Duration::from_secs(10);
+/// How long to wait for an event: a local server answers in milliseconds,
+/// the margin is for a loaded machine.
+pub const WAIT: Duration = Duration::from_secs(5);
 
 // ---------------------------------------------------------------- server
 

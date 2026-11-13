@@ -365,7 +365,7 @@ fn sessions_follow_the_model() {
         cases: 24,
         failure_persistence: None,
         // Each shrink attempt of a broken run waits out event timeouts.
-        max_shrink_time: 60_000,
+        max_shrink_time: 15_000,
         ..Config::default()
     });
     runner
