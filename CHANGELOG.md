@@ -2,7 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
-## [Unreleased]
+## [0.2.2] - 2026-11-13
+
+### Fixed
+- `connect` with a channel listed twice (`channels: ["a", "a"]`) failed with `duplicate subscription` and left no
+  client; the channel is now subscribed once.
+- `connect` with an invalid config (e.g. a bad header) closed the current connection before failing; it now fails
+  and keeps the current connection.
 
 ### Changed
 - `subRefresh` with track/untrack fields fails with `Not supported` even when not connected

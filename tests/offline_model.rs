@@ -162,10 +162,9 @@ fn offline_step(
                 config["headers"] = json!({ "bad header": "x" });
             }
             let unique: BTreeSet<String> = channels.iter().cloned().collect();
-            // The old client is closed first; a bad header or a repeated
-            // channel then fails the connect, leaving no client.
-            let want = if *bad_header || unique.len() < channels.len() {
-                *model = None;
+            // A bad header fails the connect and keeps the old client; a
+            // repeated channel is subscribed once.
+            let want = if *bad_header {
                 "RequestError"
             } else {
                 *model = Some(unique);

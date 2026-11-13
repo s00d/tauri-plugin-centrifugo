@@ -122,13 +122,9 @@ impl Centrifugo {
     }
 
     /// Creates the client, subscribes to `config.channels` and starts
-    /// connecting. Returns at once; progress arrives as events.
+    /// connecting. Returns at once; progress arrives as events. On an invalid
+    /// config the previous client is kept.
     pub async fn connect<R: Runtime>(&self, app: AppHandle<R>, config: StartConfig) -> Result<()> {
-        let old = self.client.write().await.take();
-        if let Some(old) = old {
-            old.close().await;
-        }
-
         let mut endpoints = vec![TransportEndpoint::websocket(config.url)];
         if let Some(url) = config.http_stream_url {
             endpoints.push(TransportEndpoint::http_stream(url));
@@ -185,10 +181,19 @@ impl Centrifugo {
         }
         let client = builder.build()?;
 
-        forward_client_events(app.clone(), &client);
-        for channel in config.channels {
+        // A channel listed twice is subscribed once.
+        let mut channels = config.channels;
+        channels.sort();
+        channels.dedup();
+        for channel in channels {
             let _ = self.subscribe(&app, &client, SubscribeOptions::channel(channel))?;
         }
+
+        let old = self.client.write().await.take();
+        if let Some(old) = old {
+            old.close().await;
+        }
+        forward_client_events(app.clone(), &client);
         client.connect()?;
         *self.client.write().await = Some(client);
         Ok(())
