@@ -1,5 +1,5 @@
 # cargo-mutants (https://mutants.rs): `cargo mutants` mutates src/ and runs `cargo test`.
-# The e2e tests in tests/real_centrifugo.rs need a `centrifugo` binary (or $CENTRIFUGO_BIN);
+# The scenario tests in tests/ need a `centrifugo` binary (or $CENTRIFUGO_BIN);
 # without it they are skipped and most mutants survive. CI runs this on Linux.
 
 exclude_re = [

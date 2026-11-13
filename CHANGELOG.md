@@ -10,9 +10,10 @@ All notable changes to this project will be documented in this file. See [standa
 
 ### Added
 - Mutation testing with [cargo-mutants](https://mutants.rs) (`.cargo/mutants.toml`, CI workflow `mutants`).
-- Tests: every command over IPC against a real Centrifugo, client/subscription/server-side events
-  (`connecting`, `disconnected`, `error`, `join`/`leave`, `server_*` via the server API), each map publish /
-  track field on its own.
+- Scenario tests (`tests/`, replacing the per-function tests): proptest command sequences over IPC
+  checked against a model after every step, offline and with two apps against a real Centrifugo (replies, events,
+  history, presence), plus stories for tokens, server-side subscriptions (`server_*` via the server API) and
+  transport failures.
 
 ## [0.2.1] - 2026-11-09
 

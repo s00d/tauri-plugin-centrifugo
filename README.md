@@ -107,7 +107,7 @@ cd examples/tauri-app && pnpm install && pnpm tauri dev
 ## Development
 
 ```bash
-cargo build && cargo test   # unit + end-to-end tests against a real Centrifugo ($CENTRIFUGO_BIN or PATH; skipped if missing)
+cargo build && cargo test   # scenario tests over IPC, offline and against a real Centrifugo ($CENTRIFUGO_BIN or PATH; skipped if missing)
 cargo mutants               # mutation testing (cargo install cargo-mutants; needs centrifugo too)
 pnpm typecheck && pnpm test && pnpm build   # build also runs publint, attw and a dist smoke test
 cd docs && pnpm install && pnpm dev         # documentation site

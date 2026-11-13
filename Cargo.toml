@@ -8,7 +8,7 @@ rust-version = "1.85.0"
 repository = "https://github.com/s00d/tauri-plugin-centrifugo"
 license = "MIT"
 keywords = ["tauri", "plugin", "centrifugo", "websocket", "real-time"]
-include = ["/src/**/*", "/permissions/**/*", "/tests/real_centrifugo.rs", "/build.rs", "/windows-test-manifest.xml", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE"]
+include = ["/src/**/*", "/permissions/**/*", "/tests/**/*.rs", "/build.rs", "/windows-test-manifest.xml", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/LICENSE"]
 links = "tauri-plugin-centrifugo"
 
 [dependencies]
@@ -33,7 +33,7 @@ webpki-roots = "1"
 tauri-plugin = { version = "2.3.0", features = ["build"] }
 
 [dev-dependencies]
-tokio = { version = "1.54", features = ["rt-multi-thread", "macros", "net", "io-util"] }
 tauri = { version = "2.6.2", features = ["test"] }
 hmac = "0.13"
 sha2 = "0.11"
+proptest = "1.12"
