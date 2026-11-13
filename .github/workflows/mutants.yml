@@ -1,15 +1,13 @@
 name: mutants
 
 # Mutation testing with cargo-mutants (config: .cargo/mutants.toml).
-# Pull requests: only the mutants in the changed lines. Main and weekly: all.
+# Pull requests: only the mutants in the changed lines. Pushes to main: all.
 on:
   push:
     branches: [main]
     paths: ['src/**', 'tests/**', 'Cargo.toml', '.cargo/mutants.toml', '.github/workflows/mutants.yml']
   pull_request:
     paths: ['src/**', 'tests/**', 'Cargo.toml', '.cargo/mutants.toml', '.github/workflows/mutants.yml']
-  schedule:
-    - cron: '0 3 * * 1'
   workflow_dispatch:
 
 env:

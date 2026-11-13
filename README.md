@@ -114,7 +114,7 @@ cd docs && pnpm install && pnpm dev         # documentation site
 ```
 
 CI runs all of it on Linux, macOS and Windows against Centrifugo v5.4.9, and builds for Android;
-cargo-mutants runs on pull requests (changed lines) and weekly (everything).
+cargo-mutants runs on pull requests (changed lines) and on pushes to main (everything).
 
 ## License
 
