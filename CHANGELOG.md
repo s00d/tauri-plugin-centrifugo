@@ -10,6 +10,9 @@ All notable changes to this project will be documented in this file. See [standa
   get a second TLS engine (and the C/cmake build of `aws-lc-sys`) next to the `ring` that Tauri apps already use.
 
 ### Fixed
+- Events could reach the frontend out of order, e.g. a channel's `subscribed` before the client's `connected`: client
+  and subscription events were read from separate streams by separate tasks. They now go through the SDK handlers,
+  which run one at a time in the SDK's order. The scenario model checks that `connected` comes before `subscribed`.
 - Android: the webpki-roots TLS config names the `ring` provider explicitly; `rustls::ClientConfig::builder()`
   could panic at connect when the app enabled both rustls providers.
 

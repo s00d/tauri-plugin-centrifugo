@@ -128,13 +128,30 @@ fn online_step(apps: &[App], m: &mut OnlineModel, server: &Server, case: usize, 
                 "headers": { "x-test": "1" },
             });
             apps[c].connect(config).unwrap();
-            let connected = apps[c].wait("connected");
-            assert!(
-                connected["client"].as_str().is_some_and(|s| !s.is_empty()),
-                "{connected}"
-            );
-            for ch in &channels {
-                apps[c].wait_for("subscribed", |v| v["channel"] == *ch);
+            // `connected` comes first, then one `subscribed` per channel: the
+            // frontend sees events in the SDK's order.
+            let mut left: BTreeSet<&String> = channels.iter().collect();
+            let mut connected = false;
+            let deadline = Instant::now() + WAIT;
+            while !connected || !left.is_empty() {
+                let left_time = deadline.saturating_duration_since(Instant::now());
+                let (n, v) = apps[c]
+                    .events
+                    .recv_timeout(left_time)
+                    .unwrap_or_else(|_| panic!("connected={connected}, not subscribed: {left:?}"));
+                match n.as_str() {
+                    "connected" => {
+                        assert!(v["client"].as_str().is_some_and(|s| !s.is_empty()), "{v}");
+                        connected = true;
+                    }
+                    "subscribed" => {
+                        assert!(connected, "subscribed before connected: {v}");
+                        let ch = v["channel"].as_str().unwrap_or_default().to_string();
+                        assert!(left.remove(&ch), "unexpected subscribed: {v}");
+                    }
+                    "publication" => panic!("unexpected publication: {v}"),
+                    _ => {}
+                }
             }
             m.clients[c] = Some(channels.into_iter().collect());
         }

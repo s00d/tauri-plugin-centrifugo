@@ -10,10 +10,9 @@ use crate::models::*;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use centrifuge::{
-    Client, ClientEvent, ClientInfo, DeltaType, HistoryOptions, Protocol, Publication, State,
-    StreamPosition, SubState, Subscription, SubscriptionEvent, TokenError, TransportEndpoint,
+    Client, ClientBuilder, ClientInfo, DeltaType, HistoryOptions, Protocol, Publication, State,
+    StreamPosition, SubState, Subscription, SubscriptionBuilder, TokenError, TransportEndpoint,
 };
-use futures_util::StreamExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -184,7 +183,7 @@ impl Centrifugo {
                 async move { fut.await.map(Some) }
             });
         }
-        let client = builder.build()?;
+        let client = with_client_events(builder, &app).build()?;
 
         // A channel listed twice is subscribed once.
         let mut channels = config.channels;
@@ -198,7 +197,6 @@ impl Centrifugo {
         if let Some(old) = old {
             old.close().await;
         }
-        forward_client_events(app.clone(), &client);
         client.connect()?;
         *self.client.write().await = Some(client);
         Ok(())
@@ -234,8 +232,7 @@ impl Centrifugo {
                 )
             });
         }
-        let sub = builder.build()?;
-        forward_subscription_events(app.clone(), &sub);
+        let sub = with_subscription_events(builder, app, &opts.channel).build()?;
         sub.subscribe();
         Ok(sub)
     }
@@ -434,97 +431,95 @@ impl Default for Centrifugo {
     }
 }
 
-fn forward_client_events<R: Runtime>(app: AppHandle<R>, client: &Client) {
-    let mut events = client.events();
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = events.next().await {
-            let (name, payload) = match event {
-                ClientEvent::Connecting(e) => (
-                    "connecting",
-                    json!({"ts": now(), "code": e.code, "reason": e.reason}),
-                ),
-                ClientEvent::Connected(e) => {
-                    ("connected", json!({"ts": now(), "client": e.client_id}))
-                }
-                ClientEvent::Disconnected(e) => (
-                    "disconnected",
-                    json!({"ts": now(), "code": e.code, "reason": e.reason}),
-                ),
-                ClientEvent::Error(e) => ("error", json!({"error": e.error.to_string()})),
-                ClientEvent::ServerSubscribed(e) => {
-                    ("server_subscribed", json!({"channel": e.channel}))
-                }
-                ClientEvent::ServerSubscribing(e) => {
-                    ("server_subscribing", json!({"channel": e.channel}))
-                }
-                ClientEvent::ServerUnsubscribed(e) => {
-                    ("server_unsubscribed", json!({"channel": e.channel}))
-                }
-                ClientEvent::ServerPublication(e) => (
-                    "server_publication",
-                    json!(publication_data(&e.channel, &e.publication)),
-                ),
-                ClientEvent::ServerJoin(e) => (
-                    "server_join",
-                    json!({"channel": e.channel, "client": e.info.client, "user": e.info.user}),
-                ),
-                ClientEvent::ServerLeave(e) => (
-                    "server_leave",
-                    json!({"channel": e.channel, "client": e.info.client, "user": e.info.user}),
-                ),
-                _ => continue,
-            };
-            let _ = app.emit(&format!("centrifugo:{name}"), payload);
-        }
-    });
+/// Emits `centrifugo:<name>` with a payload; one per SDK handler.
+fn emitter<R: Runtime>(app: &AppHandle<R>, name: &'static str) -> impl Fn(Value) + Send + 'static {
+    let app = app.clone();
+    move |payload| {
+        let _ = app.emit(&format!("centrifugo:{name}"), payload);
+    }
 }
 
-fn forward_subscription_events<R: Runtime>(app: AppHandle<R>, sub: &Subscription) {
-    let channel = sub.channel().to_string();
-    let mut events = sub.events();
-    tauri::async_runtime::spawn(async move {
-        while let Some(event) = events.next().await {
-            let (name, payload) = match event {
-                SubscriptionEvent::Subscribing(e) => (
-                    "subscribing",
-                    json!({"channel": channel, "code": e.code, "reason": e.reason}),
-                ),
-                SubscriptionEvent::Subscribed(e) => {
-                    let pos = e.stream_position.map(|p| StreamPositionData {
-                        offset: p.offset,
-                        epoch: p.epoch,
-                    });
-                    let payload = json!({
-                        "channel": channel,
-                        "wasRecovering": e.was_recovering,
-                        "recovered": e.recovered,
-                        "streamPosition": pos,
-                    });
-                    ("subscribed", payload)
-                }
-                SubscriptionEvent::Unsubscribed(e) => (
-                    "unsubscribed",
-                    json!({"channel": channel, "code": e.code, "reason": e.reason}),
-                ),
-                SubscriptionEvent::Publication(e) => (
-                    "publication",
-                    json!(publication_data(&channel, &e.publication)),
-                ),
-                SubscriptionEvent::Join(e) => (
-                    "join",
-                    json!({"channel": channel, "info": info_json(&e.info)}),
-                ),
-                SubscriptionEvent::Leave(e) => (
-                    "leave",
-                    json!({"channel": channel, "info": info_json(&e.info)}),
-                ),
-                SubscriptionEvent::Error(e) => (
-                    "error",
-                    json!({"channel": channel, "error": e.error.to_string()}),
-                ),
-                _ => continue,
-            };
-            let _ = app.emit(&format!("centrifugo:{name}"), payload);
-        }
-    });
+/// Client events go through the SDK handlers, not `events()` streams: the
+/// handlers of one client (and its subscriptions) run one at a time in the
+/// SDK's order, so `connected` always reaches the frontend before the
+/// `subscribed` that follows it. Separate streams read by separate tasks
+/// reorder events of one batch.
+fn with_client_events<R: Runtime>(b: ClientBuilder, app: &AppHandle<R>) -> ClientBuilder {
+    let (connecting, connected, disconnected, error) = (
+        emitter(app, "connecting"),
+        emitter(app, "connected"),
+        emitter(app, "disconnected"),
+        emitter(app, "error"),
+    );
+    let (subscribed, subscribing, unsubscribed) = (
+        emitter(app, "server_subscribed"),
+        emitter(app, "server_subscribing"),
+        emitter(app, "server_unsubscribed"),
+    );
+    let (publication, join, leave) = (
+        emitter(app, "server_publication"),
+        emitter(app, "server_join"),
+        emitter(app, "server_leave"),
+    );
+    b.on_connecting(move |_, e| {
+        connecting(json!({"ts": now(), "code": e.code, "reason": e.reason}))
+    })
+    .on_connected(move |_, e| connected(json!({"ts": now(), "client": e.client_id})))
+    .on_disconnected(move |_, e| {
+        disconnected(json!({"ts": now(), "code": e.code, "reason": e.reason}))
+    })
+    .on_error(move |_, e| error(json!({"error": e.error.to_string()})))
+    .on_subscribed(move |_, e| subscribed(json!({"channel": e.channel})))
+    .on_subscribing(move |_, e| subscribing(json!({"channel": e.channel})))
+    .on_unsubscribed(move |_, e| unsubscribed(json!({"channel": e.channel})))
+    .on_publication(move |_, e| publication(json!(publication_data(&e.channel, &e.publication))))
+    .on_join(move |_, e| {
+        join(json!({"channel": e.channel, "client": e.info.client, "user": e.info.user}))
+    })
+    .on_leave(move |_, e| {
+        leave(json!({"channel": e.channel, "client": e.info.client, "user": e.info.user}))
+    })
+}
+
+/// Subscription events through the SDK handlers; see [`with_client_events`].
+fn with_subscription_events<R: Runtime>(
+    b: SubscriptionBuilder,
+    app: &AppHandle<R>,
+    channel: &str,
+) -> SubscriptionBuilder {
+    let ch = || channel.to_string();
+    let (c1, c2, c3, c4, c5, c6, c7) = (ch(), ch(), ch(), ch(), ch(), ch(), ch());
+    let (subscribing, subscribed, unsubscribed, publication) = (
+        emitter(app, "subscribing"),
+        emitter(app, "subscribed"),
+        emitter(app, "unsubscribed"),
+        emitter(app, "publication"),
+    );
+    let (join, leave, error) = (
+        emitter(app, "join"),
+        emitter(app, "leave"),
+        emitter(app, "error"),
+    );
+    b.on_subscribing(move |_, e| {
+        subscribing(json!({"channel": c1, "code": e.code, "reason": e.reason}))
+    })
+    .on_subscribed(move |_, e| {
+        let pos = e.stream_position.map(|p| StreamPositionData {
+            offset: p.offset,
+            epoch: p.epoch,
+        });
+        subscribed(json!({
+            "channel": c2,
+            "wasRecovering": e.was_recovering,
+            "recovered": e.recovered,
+            "streamPosition": pos,
+        }))
+    })
+    .on_unsubscribed(move |_, e| {
+        unsubscribed(json!({"channel": c3, "code": e.code, "reason": e.reason}))
+    })
+    .on_publication(move |_, e| publication(json!(publication_data(&c4, &e.publication))))
+    .on_join(move |_, e| join(json!({"channel": c5, "info": info_json(&e.info)})))
+    .on_leave(move |_, e| leave(json!({"channel": c6, "info": info_json(&e.info)})))
+    .on_error(move |_, e| error(json!({"channel": c7, "error": e.error.to_string()})))
 }

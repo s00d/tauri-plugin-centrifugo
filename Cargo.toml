@@ -18,7 +18,6 @@ serde_json = "1.0.154"
 thiserror = "2.0.21"
 tokio = { version = "1.54", features = ["sync", "time"] }
 base64 = "0.23"
-futures-util = "0.3.34"
 # ring, not the default aws-lc-rs: one TLS engine (the one Tauri apps already
 # use) and no C toolchain for aws-lc-sys.
 centrifuge-client = { version = "0.1.1", default-features = false, features = ["json", "serde", "http-stream", "delta", "system-proxy", "ring"] }
