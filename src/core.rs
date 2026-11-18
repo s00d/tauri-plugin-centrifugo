@@ -97,9 +97,14 @@ fn android_tls() -> centrifuge::TlsConfig {
     let roots = rustls::RootCertStore {
         roots: webpki_roots::TLS_SERVER_ROOTS.to_vec(),
     };
-    let cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    // Explicit provider: `builder()` panics when the app enables both engines.
+    let cfg = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring supports the default TLS versions")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
     centrifuge::TlsConfig::rustls_client_config(cfg)
 }
 

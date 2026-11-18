@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
 
+## [0.2.3] - 2026-11-18
+
+### Changed
+- TLS uses `ring` instead of the SDK's default `aws-lc-rs`: `centrifuge-client` is pulled with
+  `default-features = false` plus `json`, `serde`, `http-stream`, `delta`, `system-proxy` and `ring`. Apps no longer
+  get a second TLS engine (and the C/cmake build of `aws-lc-sys`) next to the `ring` that Tauri apps already use.
+
+### Fixed
+- Android: the webpki-roots TLS config names the `ring` provider explicitly; `rustls::ClientConfig::builder()`
+  could panic at connect when the app enabled both rustls providers.
+
 ## [0.2.2] - 2026-11-13
 
 ### Fixed

@@ -1,6 +1,6 @@
 [package]
 name = "tauri-plugin-centrifugo"
-version = "0.2.2"
+version = "0.2.3"
 authors = [ "s00d" ]
 description = "Tauri plugin for Centrifugo real-time communication built on the official centrifuge-client SDK"
 edition = "2024"
@@ -19,14 +19,16 @@ thiserror = "2.0.21"
 tokio = { version = "1.54", features = ["sync", "time"] }
 base64 = "0.23"
 futures-util = "0.3.34"
-centrifuge-client = "0.1.1"
+# ring, not the default aws-lc-rs: one TLS engine (the one Tauri apps already
+# use) and no C toolchain for aws-lc-sys.
+centrifuge-client = { version = "0.1.1", default-features = false, features = ["json", "serde", "http-stream", "delta", "system-proxy", "ring"] }
 http = "1"
 
 # Android: the SDK's platform TLS verifier needs JNI + Gradle setup in the app.
 # Use Mozilla's roots (webpki-roots) instead, so `wss://` works with no setup.
 [target.'cfg(target_os = "android")'.dependencies]
-centrifuge-client = { version = "0.1.1", features = ["rustls-config"] }
-rustls = { version = "0.23.31", default-features = false, features = ["std", "tls12"] }
+centrifuge-client = { version = "0.1.1", default-features = false, features = ["json", "serde", "http-stream", "delta", "system-proxy", "ring", "rustls-config"] }
+rustls = { version = "0.23.31", default-features = false, features = ["std", "tls12", "ring"] }
 webpki-roots = "1"
 
 [build-dependencies]
